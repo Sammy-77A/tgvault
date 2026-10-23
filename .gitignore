@@ -1,0 +1,23 @@
+# Build output
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+
+# Secrets and local state - never commit these
+.env
+*.env
+config.local.*
+*.session
+*.session-journal
+session/
+data/
+*.db
+*.sqlite
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
