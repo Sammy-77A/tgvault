@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tgvault</title>
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <div class="brand"><img src="icon.svg" alt="" width="26" height="26"> tgvault</div>
+  <div class="conn" id="conn"><span class="dot"></span><span id="connText">Starting…</span></div>
+</header>
+
+<main id="app">
+  <!-- Login -->
+  <section id="login" class="card narrow" hidden>
+    <div id="step-api" class="step" hidden>
+      <h1>Connect your Telegram account</h1>
+      <p>tgvault talks to Telegram with your own API keys. Get them once:</p>
+      <ol>
+        <li>Open <a href="https://my.telegram.org" target="_blank" rel="noopener">my.telegram.org</a> and log in.</li>
+        <li>Choose <b>API development tools</b> and create an app (any name).</li>
+        <li>Copy the <b>api_id</b> and <b>api_hash</b> here.</li>
+      </ol>
+      <form id="form-api">
+        <label>API ID <input name="apiId" inputmode="numeric" autocomplete="off" required></label>
+        <label>API hash <input name="apiHash" autocomplete="off" spellcheck="false" required></label>
+        <button class="primary">Continue</button>
+      </form>
+      <p class="hint">These stay on this computer. Never share them.</p>
+    </div>
+    <div id="step-phone" class="step" hidden>
+      <h1>Log in to Telegram</h1>
+      <form id="form-phone">
+        <label>Phone number <input name="value" type="tel" placeholder="+254…" autocomplete="tel" required></label>
+        <button class="primary">Send code</button>
+      </form>
+      <p class="hint">Telegram will send a code to your Telegram app.</p>
+    </div>
+    <div id="step-code" class="step" hidden>
+      <h1>Enter the code</h1>
+      <p>Check your Telegram app for a login code sent to <b id="codePhone"></b>.</p>
+      <form id="form-code">
+        <label>Code <input name="value" inputmode="numeric" autocomplete="one-time-code" required></label>
+        <button class="primary">Log in</button>
+      </form>
+      <button class="link" id="changePhone">Use a different number</button>
+    </div>
+    <div id="step-password" class="step" hidden>
+      <h1>Two-step verification</h1>
+      <p>Your account has a Telegram password. Enter it to finish logging in.</p>
+      <form id="form-password">
+        <label>Password <input name="value" type="password" autocomplete="current-password" required></label>
+        <button class="primary">Log in</button>
+      </form>
+    </div>
+    <div id="step-wait" class="step" hidden>
+      <h1>Connecting…</h1>
+      <p id="waitText">Connecting to Telegram.</p>
+    </div>
+    <p class="error" id="loginError" hidden></p>
+  </section>
+
+  <!-- Main -->
+  <section id="main" hidden>
+    <nav class="tabs" role="tablist">
+      <button data-tab="overview" class="active">Overview</button>
+      <button data-tab="cloud">Cloud files</button>
+      <button data-tab="activity">Activity <span class="badge" id="activityBadge" hidden></span></button>
+      <button data-tab="settings">Settings</button>
+    </nav>
+
+    <div data-panel="overview">
+      <div class="card summary" id="summary"></div>
+      <div id="tasks"></div>
+      <div class="card" id="projectsCard" hidden>
+        <h2>Is this a code project?</h2>
+        <p class="hint">These folders look like code projects. A project is backed up as <b>one ZIP</b> (fast, tidy, keeps the last 3 versions). Rebuildable folders like <code>node_modules</code> and <code>vendor</code> are left out. Until you choose, tgvault leaves these folders alone.</p>
+        <ul class="list" id="projects"></ul>
+      </div>
+      <div class="card">
+        <div class="row-head">
+          <h2>Backed-up folders</h2>
+          <button id="addFolder" class="primary">Add folder</button>
+        </div>
+        <ul class="list" id="roots"></ul>
+        <p class="hint" id="rootsEmpty" hidden>No folders yet. Add one, such as Documents, and tgvault will keep it backed up.</p>
+      </div>
+    </div>
+
+    <div data-panel="cloud" hidden>
+      <div class="card">
+        <div class="row-head">
+          <nav class="crumbs" id="crumbs"></nav>
+          <div class="actions" id="folderActions"></div>
+        </div>
+        <ul class="list files" id="cloudList"></ul>
+        <p class="hint" id="cloudEmpty" hidden>Nothing here yet.</p>
+      </div>
+    </div>
+
+    <div data-panel="activity" hidden>
+      <div class="card">
+        <div class="row-head">
+          <h2>Waiting, problems and skipped</h2>
+          <button id="retryAll">Retry failed now</button>
+        </div>
+        <ul class="list" id="activity"></ul>
+        <p class="hint" id="activityEmpty" hidden>Everything is backed up.</p>
+      </div>
+    </div>
+
+    <div data-panel="settings" hidden>
+      <div class="card">
+        <h2>Settings</h2>
+        <label class="toggle"><input type="checkbox" id="autostart"> Start tgvault when I sign in to Windows (runs in the background)</label>
+        <div class="setting">
+          <div><b>Check against Telegram</b><p class="hint" id="reconcileText">Re-reads the backup channel to find files added or deleted there.</p></div>
+          <button id="reconcile">Check now</button>
+        </div>
+        <div class="setting">
+          <div><b>Account</b><p class="hint" id="accountText"></p></div>
+          <button id="logout">Log out</button>
+        </div>
+        <div class="setting">
+          <div><b>Stop tgvault</b><p class="hint">Backups pause until you run tgvault again.</p></div>
+          <button id="quit" class="danger">Quit</button>
+        </div>
+        <p class="hint" id="versionText"></p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<dialog id="dlg">
+  <form method="dialog" id="dlgForm">
+    <h2 id="dlgTitle"></h2>
+    <div id="dlgBody"></div>
+    <p class="error" id="dlgError" hidden></p>
+    <div class="dlg-actions" id="dlgActions"></div>
+  </form>
+</dialog>
+<div class="toast" id="toast" hidden></div>
+</body>
+</html>
