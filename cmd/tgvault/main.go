@@ -21,11 +21,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/Sammy-77A/tgvault/internal/backup"
-	"github.com/Sammy-77A/tgvault/internal/notify"
-	"github.com/Sammy-77A/tgvault/internal/store"
-	"github.com/Sammy-77A/tgvault/internal/tgclient"
-	"github.com/Sammy-77A/tgvault/internal/web"
+	"github.com/Sammy-77A/tgvault/internal/app"
 )
 
 var version = "0.1.0-dev"
@@ -69,41 +65,17 @@ func main() {
 		fatal(err)
 	}
 
-	st, err := store.Open(filepath.Join(dataDir, "tgvault.db"))
-	if err != nil {
-		fatal(err)
-	}
-	defer st.Close()
-
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	tg := tgclient.New(st, dataDir, version)
-	eng := backup.New(st, tg, dataDir)
-	tg.OnAccountChange(eng.ForgetAccount)
-	addr := fmt.Sprintf("127.0.0.1:%d", actualPort)
-	pageURL := fmt.Sprintf("http://%s/?t=%s", addr, token)
-	nw := notify.New(st, tg, pageURL)
-	srv := web.New(st, tg, eng, nw, token, addr, version, cancel)
-
-	log.Printf("tgvault %s started; data in %s; page at http://%s", version, dataDir, addr)
-	go tg.Run(ctx)
-	go nw.Run(ctx)
-	go func() {
-		if err := eng.Run(ctx); err != nil {
-			log.Printf("engine: %v", err)
-			cancel()
-		}
-	}()
+	a, err := app.Start(ctx, app.Options{DataDir: dataDir, Listener: listener, Token: token, Version: version})
+	if err != nil {
+		fatal(err)
+	}
 	if !*background {
-		openBrowser(pageURL)
+		openBrowser(a.URL)
 	}
-	if err := srv.Serve(ctx, listener); err != nil {
-		log.Printf("web: %v", err)
-	}
-	cancel()
-	time.Sleep(500 * time.Millisecond) // let workers record where they stopped
-	log.Printf("tgvault stopped")
+	<-a.Done()
 }
 
 // openExisting opens the page of an already running tgvault, if any.

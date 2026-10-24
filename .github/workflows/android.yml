@@ -1,0 +1,73 @@
+name: android
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Go tests
+        run: go test ./...
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Build the Go library for Android
+        env:
+          VERSION: 0.2.0-test.${{ github.run_number }}
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          go install golang.org/x/mobile/cmd/gomobile golang.org/x/mobile/cmd/gobind
+          gomobile init
+          mkdir -p android/app/libs
+          gomobile bind -target=android/arm64,android/amd64 -androidapi 26 \
+            -ldflags "-s -w -X github.com/Sammy-77A/tgvault/mobile.Version=$VERSION" \
+            -o android/app/libs/tgvault.aar ./mobile
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+
+      - name: Build the APK
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          TGVAULT_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          TGVAULT_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          TGVAULT_VERSION_CODE: ${{ github.run_number }}
+          TGVAULT_VERSION_NAME: 0.2.0-test.${{ github.run_number }}
+        run: |
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.p12"
+          export TGVAULT_KEYSTORE="$RUNNER_TEMP/release.p12"
+          gradle -p android assembleRelease --no-daemon
+          cp android/app/build/outputs/apk/release/app-release.apk tgvault-test.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tgvault-apk
+          path: tgvault-test.apk
+
+      - name: Publish to the "android-test" pre-release
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view android-test >/dev/null 2>&1 || \
+            gh release create android-test --prerelease --title "Android test build" \
+              --notes "Latest test build of the tgvault Android app. Open this page on the phone and tap tgvault-test.apk to install or update."
+          gh release upload android-test tgvault-test.apk --clobber
+          gh release edit android-test --notes "Latest test build of the tgvault Android app (build ${{ github.run_number }}, commit ${GITHUB_SHA::7}). Open this page on the phone and tap tgvault-test.apk to install or update."

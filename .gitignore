@@ -21,3 +21,12 @@ data/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Android
+*.jks
+*.keystore
+android/.gradle/
+android/build/
+android/app/build/
+android/app/libs/
+android/local.properties
