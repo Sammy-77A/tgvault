@@ -158,3 +158,11 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
   .list li { flex-wrap: wrap; }
   .list .actions { width: 100%; padding-left: 2.35rem; }
 }
+
+/* Logging in a phone from the PC */
+.pairbox { margin-top: 1.5rem; padding: 1rem; border: 1px solid var(--accent); border-radius: 10px; }
+.pairbox h2 { margin-top: 0; }
+dl.pair { display: grid; grid-template-columns: auto 1fr; gap: .35rem 1rem; margin: .75rem 0; }
+dl.pair dt { color: var(--muted); }
+dl.pair dd { margin: 0; font-weight: 700; font-size: 1.25rem; letter-spacing: .04em; word-break: break-all; }
+.phone .pc-only { display: none; }

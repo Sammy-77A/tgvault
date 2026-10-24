@@ -12,6 +12,7 @@ import (
 
 	"github.com/Sammy-77A/tgvault/internal/backup"
 	"github.com/Sammy-77A/tgvault/internal/notify"
+	"github.com/Sammy-77A/tgvault/internal/pair"
 	"github.com/Sammy-77A/tgvault/internal/store"
 	"github.com/Sammy-77A/tgvault/internal/tgclient"
 	"github.com/Sammy-77A/tgvault/internal/web"
@@ -23,6 +24,7 @@ type Options struct {
 	Listener net.Listener // the local web page listens here
 	Token    string       // protects the web page
 	Version  string
+	Pairing  bool // let a logged-in PC log this device in over the local network
 }
 
 // App is a running tgvault.
@@ -48,6 +50,11 @@ func Start(ctx context.Context, o Options) (*App, error) {
 	tg.OnAccountChange(eng.ForgetAccount)
 	nw := notify.New(st, tg, a.URL)
 	srv := web.New(st, tg, eng, nw, o.Token, addr, o.Version, cancel)
+	if o.Pairing {
+		pl := pair.NewListener(tg)
+		srv.SetPairing(pl)
+		go pl.Run(ctx)
+	}
 
 	log.Printf("tgvault %s started; data in %s; page at http://%s", o.Version, o.DataDir, addr)
 	go tg.Run(ctx)

@@ -20,6 +20,7 @@ import (
 
 	"github.com/Sammy-77A/tgvault/internal/backup"
 	"github.com/Sammy-77A/tgvault/internal/notify"
+	"github.com/Sammy-77A/tgvault/internal/pair"
 	"github.com/Sammy-77A/tgvault/internal/store"
 	"github.com/Sammy-77A/tgvault/internal/tgclient"
 )
@@ -40,7 +41,11 @@ type Server struct {
 	quit    func()
 	mux     *http.ServeMux
 	notify  *notify.Watcher
+	pairing *pair.Listener // set on devices that can be logged in from the PC
 }
+
+// SetPairing shows the "log in from your PC" details while logged out.
+func (s *Server) SetPairing(p *pair.Listener) { s.pairing = p }
 
 // New creates the server. token protects the API; quit stops the app.
 func New(st *store.Store, tg *tgclient.Client, eng *backup.Engine, nw *notify.Watcher, token, addr, version string, quit func()) *Server {
@@ -116,6 +121,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/login/code", s.loginCode)
 	s.mux.HandleFunc("POST /api/login/password", s.loginPassword)
 	s.mux.HandleFunc("POST /api/logout", s.logout)
+	s.mux.HandleFunc("POST /api/pair-phone", s.pairPhone)
 	s.mux.HandleFunc("POST /api/login/resend", s.loginResend)
 	s.mux.HandleFunc("POST /api/login/qr", s.loginQR)
 	s.mux.HandleFunc("POST /api/login/qr/cancel", s.loginQRCancel)
@@ -224,10 +230,35 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 		"projects":  projects,
 		"autostart": autostartEnabled(),
 		"notify":    notify.Enabled(s.st),
+		"pairing":   s.pairingInfo(),
 	})
 }
 
 // ---- login ----
+
+func (s *Server) pairingInfo() *pair.Info {
+	if s.pairing == nil {
+		return nil
+	}
+	return s.pairing.Info()
+}
+
+// pairPhone logs a phone in to this PC's Telegram account.
+func (s *Server) pairPhone(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Address string `json:"address"`
+		Code    string `json:"code"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		fail(w, 400, "bad request")
+		return
+	}
+	if err := pair.Approve(r.Context(), s.tg, body.Address, body.Code); err != nil {
+		fail(w, 400, err.Error())
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
 
 func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 	var body struct {

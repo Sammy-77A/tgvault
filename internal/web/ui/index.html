@@ -52,11 +52,6 @@
       </ol>
       <div class="qr"><img id="qrImg" alt="Login QR code" hidden><span id="qrWait">Getting a code from Telegram…</span></div>
       <p class="hint">The code refreshes by itself every half minute.</p>
-      <div id="qrPhone" hidden>
-        <p>On this phone, you can't scan your own screen. Try this instead:</p>
-        <a class="btn primary" id="qrOpen" href="#">Log in with the Telegram app</a>
-        <p class="hint">Telegram should ask you to confirm the login. If nothing happens, log in with your phone number below.</p>
-      </div>
       <button class="link" id="cancelQR" type="button">Log in with a phone number instead</button>
     </div>
     <div id="step-code" class="step" hidden>
@@ -83,6 +78,15 @@
     <div id="step-wait" class="step" hidden>
       <h1>Connecting…</h1>
       <p id="waitText">Connecting to Telegram.</p>
+    </div>
+    <div id="pairBox" class="pairbox" hidden>
+      <h2>Easiest: log in from your PC</h2>
+      <p>On your PC, open tgvault, go to <b>Settings → Log in a phone</b>, and enter:</p>
+      <dl class="pair">
+        <dt>Address</dt><dd id="pairAddr"></dd>
+        <dt>Code</dt><dd id="pairCode"></dd>
+      </dl>
+      <p class="hint">Both need to be on the same Wi-Fi. You won't need API keys or a login code on this phone.</p>
     </div>
     <p class="error" id="loginError" hidden></p>
   </section>
@@ -135,7 +139,7 @@
     <div data-panel="settings" hidden>
       <div class="card">
         <h2>Settings</h2>
-        <label class="toggle"><input type="checkbox" id="autostart"> Start tgvault when I sign in to Windows (runs in the background)</label>
+        <label class="toggle pc-only"><input type="checkbox" id="autostart"> Start tgvault when I sign in to Windows (runs in the background)</label>
         <div class="setting">
           <label class="toggle"><input type="checkbox" id="notify"> Notify me when something needs my attention</label>
           <button id="testNotify">Send a test</button>
@@ -149,7 +153,11 @@
           <div><b>Account</b><p class="hint" id="accountText"></p></div>
           <button id="logout">Log out</button>
         </div>
-        <div class="setting">
+        <div class="setting pc-only">
+          <div><b>Log in a phone</b><p class="hint">Logs tgvault on your phone in to this account. Open tgvault on the phone first; it shows an address and a code.</p></div>
+          <button id="pairPhone">Log in a phone</button>
+        </div>
+        <div class="setting pc-only">
           <div><b>Stop tgvault</b><p class="hint">Backups pause until you run tgvault again.</p></div>
           <button id="quit" class="danger">Quit</button>
         </div>

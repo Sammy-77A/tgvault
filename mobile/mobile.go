@@ -50,7 +50,7 @@ func Start(dataDir string) (string, error) {
 		l.Close()
 		return "", err
 	}
-	a, err := app.Start(context.Background(), app.Options{DataDir: dataDir, Listener: l, Token: hex.EncodeToString(buf), Version: Version})
+	a, err := app.Start(context.Background(), app.Options{DataDir: dataDir, Listener: l, Token: hex.EncodeToString(buf), Version: Version, Pairing: true})
 	if err != nil {
 		l.Close()
 		return "", err

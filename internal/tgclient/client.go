@@ -726,3 +726,56 @@ func friendly(err error) string {
 
 // Friendly is exported for other packages.
 func Friendly(err error) string { return friendly(err) }
+
+// APICredentials returns the stored API ID and hash (zero values if not set).
+func (c *Client) APICredentials() (int, string) {
+	id, _ := strconv.Atoi(c.st.Get(keyAPIID))
+	return id, c.st.Get(keyAPIHash)
+}
+
+// LoginLink starts QR login if needed and returns the current tg://login link,
+// so another tgvault that is logged in can approve it. It waits for the
+// connection and the first token until ctx ends.
+func (c *Client) LoginLink(ctx context.Context) (string, error) {
+	t := time.NewTicker(300 * time.Millisecond)
+	defer t.Stop()
+	for {
+		info := c.Info()
+		switch info.Status {
+		case StatusReady:
+			return "", errors.New("this device is already logged in")
+		case StatusNeedPassword:
+			return "", errors.New("this device is waiting for your two-step verification password; enter it there")
+		case StatusQR:
+			if info.QRURL != "" {
+				return info.QRURL, nil
+			}
+		case StatusNeedPhone, StatusNeedCode:
+			if err := c.StartQR(); err != nil {
+				return "", err
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return "", errors.New("the device didn't get a login code from Telegram in time; check its internet connection")
+		case <-t.C:
+		}
+	}
+}
+
+// AcceptLogin approves a tg://login link from another device, logging that
+// device in to this account. It is what scanning a QR code in the Telegram app does.
+func (c *Client) AcceptLogin(ctx context.Context, link string) error {
+	tok, err := qrlogin.ParseTokenURL(link)
+	if err != nil {
+		return fmt.Errorf("not a Telegram login link: %w", err)
+	}
+	api, _, err := c.conn()
+	if err != nil {
+		return err
+	}
+	if _, err := qrlogin.AcceptQR(ctx, api, tok); err != nil {
+		return errors.New(friendly(err))
+	}
+	return nil
+}

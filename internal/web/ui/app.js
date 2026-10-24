@@ -145,6 +145,7 @@ function render() {
 let lastStep = "";
 let lastQR = "";
 const onPhone = /Android/i.test(navigator.userAgent);
+if (onPhone) document.documentElement.classList.add("phone");
 let lastServerError = "";
 function renderLogin(tg) {
   const steps = {
@@ -171,15 +172,19 @@ function renderLogin(tg) {
   $("resendCode").textContent = tg.codeNext || "Send the code again";
   $("waitText").textContent = tg.error || "Connecting to Telegram.";
 
+  const pairing = state.pairing;
+  $("pairBox").hidden = !pairing || tg.status === "need_password";
+  if (pairing) {
+    $("pairAddr").textContent = pairing.addresses.join("  or  ");
+    $("pairCode").textContent = pairing.code;
+  }
+
   const url = tg.qrUrl || "";
   if (url !== lastQR) {
     lastQR = url;
     $("qrImg").hidden = !url;
     $("qrWait").hidden = !!url;
     if (url) $("qrImg").src = `/api/login/qr.png?v=${Date.now()}`;
-    // On a phone the QR code can't be scanned; the same tg://login link can be opened instead.
-    $("qrPhone").hidden = !(url && onPhone);
-    if (url) $("qrOpen").href = url;
   }
 }
 
@@ -576,6 +581,24 @@ document.addEventListener("DOMContentLoaded", () => {
   $("notify").addEventListener("change", (ev) => api("/api/notify", { on: ev.target.checked })
     .then(() => toast(ev.target.checked ? "Notifications on." : "Notifications off."))
     .catch((err) => { toast(err.message); refresh(); }));
+  $("pairPhone").addEventListener("click", () => {
+    const addr = el("input", { autocomplete: "off", spellcheck: "false", placeholder: "192.168.1.23:40123" });
+    const code = el("input", { autocomplete: "off", inputmode: "numeric", placeholder: "123456" });
+    dialog({
+      title: "Log in a phone",
+      body: el("div", {},
+        el("p", {}, "Open tgvault on the phone. Enter the address and code it shows:"),
+        el("label", {}, "Address", addr),
+        el("label", {}, "Code", code),
+        el("p", { class: "hint" }, "This can take up to a minute while the phone connects to Telegram.")),
+      buttons: [{ label: "Cancel", value: null }, { label: "Log in the phone", value: "go", primary: true }],
+      run: async () => {
+        await api("/api/pair-phone", { address: addr.value, code: code.value });
+        toast("The phone is logged in.");
+      },
+    });
+    addr.focus();
+  });
   $("testNotify").addEventListener("click", () => api("/api/notify/test", {})
     .then(() => toast("Sent. Look at the bottom-right of your screen."))
     .catch((err) => toast(err.message)));
