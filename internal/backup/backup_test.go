@@ -193,6 +193,27 @@ func TestChangeDuringUploadRequeues(t *testing.T) {
 	}
 }
 
+func TestUploadKeptWhenFileDeletedAfterwards(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "a.txt")
+	os.WriteFile(p, []byte("hello"), 0o644)
+	before, _ := os.Stat(p)
+
+	after, err := os.Stat(p)
+	if !uploadStillValid(before, after, err) {
+		t.Fatal("an unchanged file must keep its upload")
+	}
+	os.WriteFile(p, []byte("hello, changed"), 0o644)
+	after, err = os.Stat(p)
+	if uploadStillValid(before, after, err) {
+		t.Fatal("a changed file must be uploaded again")
+	}
+	os.Remove(p)
+	after, err = os.Stat(p)
+	if !uploadStillValid(before, after, err) {
+		t.Fatal("a file deleted after its upload must keep that upload")
+	}
+}
+
 func TestProjectZipSkipsRebuildableFolders(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "composer.json"), "{}")

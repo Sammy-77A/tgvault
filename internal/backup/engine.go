@@ -517,12 +517,22 @@ func (e *Engine) uploadFile(ctx context.Context, it store.Item, abs string) outc
 		return e.failure(ctx, err)
 	}
 	// If the file changed while it was uploading, the copy may be inconsistent.
-	if after, err := os.Stat(abs); err != nil || after.Size() != fi.Size() || !after.ModTime().Equal(fi.ModTime()) {
+	if after, err := os.Stat(abs); !uploadStillValid(fi, after, err) {
 		_ = e.tg.DeleteMessages(ctx, []int{msgID})
 		return outcome{state: store.StateFailed, retry: quietFile, note: "the file changed while uploading; will upload the new version"}
 	}
 	return e.recordVersion(ctx, store.Version{MsgID: msgID, CloudPath: it.CloudPath, Kind: store.KindFile,
 		Size: fi.Size(), Mtime: fi.ModTime().Unix(), Hash: hash, UploadedAt: time.Now().Unix()}, "")
+}
+
+// uploadStillValid reports whether a finished upload matches the file. A file
+// deleted right after its upload is kept: Windows can't delete it while
+// tgvault has it open, so the upload was complete, and it may be the only copy.
+func uploadStillValid(before, after os.FileInfo, statErr error) bool {
+	if errors.Is(statErr, os.ErrNotExist) {
+		return true
+	}
+	return statErr == nil && after.Size() == before.Size() && after.ModTime().Equal(before.ModTime())
 }
 
 func (e *Engine) send(ctx context.Context, it store.Item, abs, name string, size int64, hash, caption string) (int, error) {
