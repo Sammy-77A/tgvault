@@ -38,16 +38,34 @@
         <label>Phone number <input name="value" type="tel" placeholder="+254…" autocomplete="tel" required></label>
         <button class="primary">Send code</button>
       </form>
-      <p class="hint">Telegram will send a code to your Telegram app.</p>
+      <p class="hint">Use the number your Telegram account is on, with the country code.</p>
+      <div class="or"><span>or</span></div>
+      <button id="startQR" type="button">Log in with a QR code instead</button>
+      <p class="hint">No code needed: you scan it with the Telegram app on your phone.</p>
+    </div>
+    <div id="step-qr" class="step" hidden>
+      <h1>Scan with your phone</h1>
+      <ol>
+        <li>Open Telegram on your phone.</li>
+        <li>Go to <b>Settings → Devices → Link Desktop Device</b>.</li>
+        <li>Point your phone at this code.</li>
+      </ol>
+      <div class="qr"><img id="qrImg" alt="Login QR code" hidden><span id="qrWait">Getting a code from Telegram…</span></div>
+      <p class="hint">The code refreshes by itself every half minute.</p>
+      <button class="link" id="cancelQR" type="button">Log in with a phone number instead</button>
     </div>
     <div id="step-code" class="step" hidden>
       <h1>Enter the code</h1>
-      <p>Check your Telegram app for a login code sent to <b id="codePhone"></b>.</p>
+      <p>Telegram sent a login code for <b id="codePhone"></b> <span id="codeVia"></span>.</p>
       <form id="form-code">
-        <label>Code <input name="value" inputmode="numeric" autocomplete="one-time-code" required></label>
+        <label>Code <input name="value" autocomplete="one-time-code" required></label>
         <button class="primary">Log in</button>
       </form>
-      <button class="link" id="changePhone">Use a different number</button>
+      <div class="actions code-actions">
+        <button class="small" id="resendCode" type="button">Send the code again</button>
+        <button class="small" id="codeToQR" type="button">Use a QR code instead</button>
+        <button class="link" id="changePhone" type="button">Use a different number</button>
+      </div>
     </div>
     <div id="step-password" class="step" hidden>
       <h1>Two-step verification</h1>

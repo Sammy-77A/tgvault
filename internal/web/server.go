@@ -114,6 +114,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/login/code", s.loginCode)
 	s.mux.HandleFunc("POST /api/login/password", s.loginPassword)
 	s.mux.HandleFunc("POST /api/logout", s.logout)
+	s.mux.HandleFunc("POST /api/login/resend", s.loginResend)
+	s.mux.HandleFunc("POST /api/login/qr", s.loginQR)
+	s.mux.HandleFunc("POST /api/login/qr/cancel", s.loginQRCancel)
+	s.mux.HandleFunc("GET /api/login/qr.png", s.loginQRImage)
 
 	s.mux.HandleFunc("POST /api/roots", s.addRoot)
 	s.mux.HandleFunc("POST /api/roots/{id}/remove", s.removeRoot)
@@ -277,6 +281,40 @@ func (s *Server) loginPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]bool{"ok": true})
+}
+
+func (s *Server) loginResend(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := reqCtx(r)
+	defer cancel()
+	if err := s.tg.ResendCode(ctx); err != nil {
+		fail(w, 400, err.Error())
+		return
+	}
+	writeJSON(w, map[string]bool{"ok": true})
+}
+
+func (s *Server) loginQR(w http.ResponseWriter, r *http.Request) {
+	if err := s.tg.StartQR(); err != nil {
+		fail(w, 400, err.Error())
+		return
+	}
+	writeJSON(w, map[string]bool{"ok": true})
+}
+
+func (s *Server) loginQRCancel(w http.ResponseWriter, r *http.Request) {
+	s.tg.CancelQR()
+	writeJSON(w, map[string]bool{"ok": true})
+}
+
+func (s *Server) loginQRImage(w http.ResponseWriter, r *http.Request) {
+	img, err := s.tg.QRImage()
+	if err != nil {
+		fail(w, 404, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Write(img)
 }
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {

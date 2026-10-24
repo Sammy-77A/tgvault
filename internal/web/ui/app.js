@@ -143,20 +143,52 @@ function render() {
 // ---------- login ----------
 
 let lastStep = "";
+let lastQR = "";
+let lastServerError = "";
 function renderLogin(tg) {
   const steps = {
     need_api: "step-api", need_phone: "step-phone", need_code: "step-code",
-    need_password: "step-password", connecting: "step-wait",
+    need_password: "step-password", need_qr: "step-qr", connecting: "step-wait",
   };
   const step = steps[tg.status] || "step-wait";
   for (const s of Object.values(steps)) $(s).hidden = s !== step;
   if (step !== lastStep) {
     lastStep = step;
+    $("loginError").hidden = true;
     const input = $(step).querySelector("input");
     if (input) input.focus();
   }
+  // Errors reported by the app itself (e.g. the QR code expired).
+  if (tg.error && step !== "step-wait" && tg.error !== lastServerError) {
+    $("loginError").textContent = tg.error;
+    $("loginError").hidden = false;
+  }
+  lastServerError = tg.error || "";
+
   $("codePhone").textContent = tg.phone || "";
+  $("codeVia").textContent = tg.codeVia || "";
+  $("resendCode").textContent = tg.codeNext || "Send the code again";
   $("waitText").textContent = tg.error || "Connecting to Telegram.";
+
+  const url = tg.qrUrl || "";
+  if (url !== lastQR) {
+    lastQR = url;
+    $("qrImg").hidden = !url;
+    $("qrWait").hidden = !!url;
+    if (url) $("qrImg").src = `/api/login/qr.png?v=${Date.now()}`;
+  }
+}
+
+async function loginAction(url, okMsg) {
+  $("loginError").hidden = true;
+  try {
+    await api(url, {});
+    if (okMsg) toast(okMsg);
+  } catch (err) {
+    $("loginError").textContent = err.message;
+    $("loginError").hidden = false;
+  }
+  refresh();
 }
 
 function loginForm(formId, url, field) {
@@ -474,7 +506,11 @@ document.addEventListener("DOMContentLoaded", () => {
   loginForm("form-phone", "/api/login/phone", true);
   loginForm("form-code", "/api/login/code", true);
   loginForm("form-password", "/api/login/password", true);
-  $("changePhone").addEventListener("click", () => api("/api/logout", {}).then(refresh));
+  $("changePhone").addEventListener("click", () => loginAction("/api/login/qr/cancel"));
+  $("startQR").addEventListener("click", () => loginAction("/api/login/qr"));
+  $("codeToQR").addEventListener("click", () => loginAction("/api/login/qr"));
+  $("cancelQR").addEventListener("click", () => loginAction("/api/login/qr/cancel"));
+  $("resendCode").addEventListener("click", () => loginAction("/api/login/resend", "Asked Telegram to send the code again."));
 
   for (const b of document.querySelectorAll(".tabs button")) b.addEventListener("click", () => showTab(b.dataset.tab));
   $("addFolder").addEventListener("click", addFolder);

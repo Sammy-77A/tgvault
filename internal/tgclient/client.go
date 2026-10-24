@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,10 +18,12 @@ import (
 	"github.com/gotd/td/session"
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/auth"
+	"github.com/gotd/td/telegram/auth/qrlogin"
 	"github.com/gotd/td/telegram/query"
 	"github.com/gotd/td/telegram/query/dialogs"
 	"github.com/gotd/td/tg"
 	"github.com/gotd/td/tgerr"
+	"rsc.io/qr"
 
 	"github.com/Sammy-77A/tgvault/internal/store"
 )
@@ -37,6 +40,7 @@ const (
 	StatusNeedPhone    = "need_phone"
 	StatusNeedCode     = "need_code"
 	StatusNeedPassword = "need_password"
+	StatusQR           = "need_qr"
 	StatusReady        = "ready"
 )
 
@@ -54,6 +58,9 @@ type Info struct {
 	Status   string `json:"status"`
 	Error    string `json:"error,omitempty"`
 	Phone    string `json:"phone,omitempty"`
+	CodeVia  string `json:"codeVia,omitempty"`  // where the login code was sent
+	CodeNext string `json:"codeNext,omitempty"` // what "resend" would do
+	QRURL    string `json:"qrUrl,omitempty"`    // set while QR login is waiting
 	Account  string `json:"account,omitempty"`
 	Channel  string `json:"channel,omitempty"`
 	Online   bool   `json:"online"`
@@ -74,6 +81,13 @@ type Client struct {
 	account   string
 	online    bool
 	floodEnd  time.Time
+	codeVia   string
+	codeNext  string
+	emailCode bool
+	qrURL     string
+	qrCancel  context.CancelFunc
+	runCtx    context.Context
+	qrSignal  qrlogin.LoggedIn
 	tc        *telegram.Client
 	api       *tg.Client
 	channel   *tg.InputChannel
@@ -105,7 +119,8 @@ func (c *Client) sessionPath() string { return filepath.Join(c.dataDir, "session
 func (c *Client) Info() Info {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	in := Info{Status: c.status, Error: c.lastErr, Phone: c.phone, Account: c.account, Online: c.online}
+	in := Info{Status: c.status, Error: c.lastErr, Phone: c.phone, Account: c.account, Online: c.online,
+		CodeVia: c.codeVia, CodeNext: c.codeNext, QRURL: c.qrURL}
 	if c.status == StatusReady {
 		in.Channel = ChannelTitle
 	}
@@ -233,7 +248,11 @@ func (c *Client) disconnect() {
 
 func (c *Client) runOnce(ctx context.Context, id int, hash string) error {
 	c.setStatus(StatusConnecting, "")
+	// Updates are only needed so QR login learns when the code was scanned.
+	dispatcher := tg.NewUpdateDispatcher()
+	qrSignal := qrlogin.OnLoginToken(dispatcher)
 	tc := telegram.NewClient(id, hash, telegram.Options{
+		UpdateHandler:  dispatcher,
 		SessionStorage: &session.FileStorage{Path: c.sessionPath()},
 		Device: telegram.DeviceConfig{
 			DeviceModel:    "PC",
@@ -252,6 +271,7 @@ func (c *Client) runOnce(ctx context.Context, id int, hash string) error {
 	return tc.Run(ctx, func(ctx context.Context) error {
 		c.mu.Lock()
 		c.tc, c.api, c.online = tc, tc.API(), true
+		c.runCtx, c.qrSignal = ctx, qrSignal
 		c.mu.Unlock()
 
 		st, err := tc.Auth().Status(ctx)
@@ -362,19 +382,86 @@ func (c *Client) SubmitPhone(ctx context.Context, phone string) error {
 	if err != nil {
 		return err
 	}
+	phone = strings.NewReplacer(" ", "", "-", "", "(", "", ")", "").Replace(phone)
 	sent, err := tc.Auth().SendCode(ctx, phone, auth.SendCodeOptions{})
 	if err != nil {
 		return errors.New(friendly(err))
 	}
+	return c.codeSent(phone, sent)
+}
+
+// ResendCode asks Telegram to send the code again, usually another way (SMS or call).
+func (c *Client) ResendCode(ctx context.Context) error {
+	tc, err := c.loginClient()
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	phone, hash := c.phone, c.codeHash
+	c.mu.Unlock()
+	if phone == "" {
+		return errors.New("enter your phone number first")
+	}
+	sent, err := tc.Auth().ResendCode(ctx, phone, hash)
+	if err != nil {
+		if tgerr.Is(err, "SEND_CODE_UNAVAILABLE") {
+			return errors.New("Telegram has no other way to send the code; use QR login instead")
+		}
+		return errors.New(friendly(err))
+	}
+	return c.codeSent(phone, sent)
+}
+
+func (c *Client) codeSent(phone string, sent tg.AuthSentCodeClass) error {
 	code, ok := sent.(*tg.AuthSentCode)
 	if !ok {
-		return errors.New("Telegram did not send a login code; check the number and try again")
+		return errors.New("Telegram did not send a login code; try QR login instead")
+	}
+	if _, ok := code.Type.(*tg.AuthSentCodeTypeSetUpEmailRequired); ok {
+		return errors.New(`Telegram wants this account to set up a login email before new apps can get codes; use "Log in with a QR code" instead`)
+	}
+	via, email := describeCodeType(code.Type)
+	next := ""
+	if nt, ok := code.GetNextType(); ok {
+		next = describeNextType(nt)
 	}
 	c.mu.Lock()
 	c.phone, c.codeHash = phone, code.PhoneCodeHash
+	c.codeVia, c.codeNext, c.emailCode = via, next, email
 	c.status, c.lastErr = StatusNeedCode, ""
 	c.mu.Unlock()
+	log.Printf("telegram: login code sent %s", via)
 	return nil
+}
+
+func describeCodeType(t tg.AuthSentCodeTypeClass) (via string, email bool) {
+	switch v := t.(type) {
+	case *tg.AuthSentCodeTypeApp:
+		return `as a message from "Telegram" in your Telegram app on your other devices (open that chat; there may be no notification)`, false
+	case *tg.AuthSentCodeTypeSMS, *tg.AuthSentCodeTypeSMSWord, *tg.AuthSentCodeTypeSMSPhrase, *tg.AuthSentCodeTypeFirebaseSMS:
+		return "by SMS", false
+	case *tg.AuthSentCodeTypeCall:
+		return "by a phone call that reads out the code", false
+	case *tg.AuthSentCodeTypeFlashCall, *tg.AuthSentCodeTypeMissedCall:
+		return "as a missed call (the code is the last digits of the calling number)", false
+	case *tg.AuthSentCodeTypeEmailCode:
+		return "to your login email " + v.EmailPattern, true
+	case *tg.AuthSentCodeTypeFragmentSMS:
+		return "through Fragment (" + v.URL + ")", false
+	}
+	return "to your Telegram account", false
+}
+
+func describeNextType(t tg.AuthCodeTypeClass) string {
+	switch t.(type) {
+	case *tg.AuthCodeTypeSMS:
+		return "Send it by SMS instead"
+	case *tg.AuthCodeTypeCall:
+		return "Call me with the code instead"
+	case *tg.AuthCodeTypeFlashCall, *tg.AuthCodeTypeMissedCall:
+		return "Send it as a missed call instead"
+	}
+	return "Send the code again"
 }
 
 // SubmitCode signs in with the login code.
@@ -384,9 +471,21 @@ func (c *Client) SubmitCode(ctx context.Context, code string) error {
 		return err
 	}
 	c.mu.Lock()
-	phone, hash := c.phone, c.codeHash
+	phone, hash, email := c.phone, c.codeHash, c.emailCode
 	c.mu.Unlock()
-	_, err = tc.Auth().SignIn(ctx, phone, code, hash)
+	if email {
+		// Codes sent by email go in a different field than phone codes.
+		_, err = tc.API().AuthSignIn(ctx, &tg.AuthSignInRequest{
+			PhoneNumber:       phone,
+			PhoneCodeHash:     hash,
+			EmailVerification: &tg.EmailVerificationCode{Code: code},
+		})
+		if tgerr.Is(err, "SESSION_PASSWORD_NEEDED") {
+			err = auth.ErrPasswordAuthNeeded
+		}
+	} else {
+		_, err = tc.Auth().SignIn(ctx, phone, code, hash)
+	}
 	if errors.Is(err, auth.ErrPasswordAuthNeeded) {
 		c.setStatus(StatusNeedPassword, "")
 		return nil
@@ -400,6 +499,79 @@ func (c *Client) SubmitCode(ctx context.Context, code string) error {
 	}
 	c.loggedIn()
 	return nil
+}
+
+// StartQR begins QR-code login: the user scans the code with the Telegram app
+// on their phone (Settings > Devices > Link Desktop Device).
+func (c *Client) StartQR() error {
+	tc, err := c.loginClient()
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	if c.qrCancel != nil {
+		c.mu.Unlock()
+		return nil // already waiting
+	}
+	ctx, cancel := context.WithTimeout(c.runCtx, 10*time.Minute)
+	c.qrCancel = cancel
+	c.status, c.lastErr, c.qrURL = StatusQR, "", ""
+	signal := c.qrSignal
+	c.mu.Unlock()
+
+	go func() {
+		defer cancel()
+		_, err := tc.QR().Auth(ctx, signal, func(_ context.Context, t qrlogin.Token) error {
+			c.mu.Lock()
+			c.qrURL = t.URL()
+			c.mu.Unlock()
+			return nil
+		})
+		c.mu.Lock()
+		c.qrCancel, c.qrURL = nil, ""
+		c.mu.Unlock()
+		switch {
+		case err == nil:
+			c.loggedIn()
+		case tgerr.Is(err, "SESSION_PASSWORD_NEEDED") || errors.Is(err, auth.ErrPasswordAuthNeeded):
+			c.setStatus(StatusNeedPassword, "")
+		case errors.Is(err, context.Canceled):
+			// Cancelled by the user or a reconnect; status is set elsewhere.
+		case errors.Is(err, context.DeadlineExceeded):
+			c.setStatus(StatusNeedPhone, "the QR code wasn't scanned in time; try again")
+		default:
+			log.Printf("telegram: QR login: %v", err)
+			c.setStatus(StatusNeedPhone, "QR login failed: "+friendly(err))
+		}
+	}()
+	return nil
+}
+
+// CancelQR stops waiting for a scan and goes back to phone login.
+func (c *Client) CancelQR() {
+	c.mu.Lock()
+	cancel := c.qrCancel
+	c.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	c.setStatus(StatusNeedPhone, "")
+}
+
+// QRImage returns the current login QR code as a PNG.
+func (c *Client) QRImage() ([]byte, error) {
+	c.mu.Lock()
+	u := c.qrURL
+	c.mu.Unlock()
+	if u == "" {
+		return nil, errors.New("no QR code yet")
+	}
+	code, err := qr.Encode(u, qr.M)
+	if err != nil {
+		return nil, err
+	}
+	code.Scale = 8 // large enough for a phone camera
+	return code.PNG(), nil
 }
 
 // SubmitPassword completes login for accounts with two-step verification.
@@ -441,6 +613,7 @@ func (c *Client) Logout(ctx context.Context) error {
 	}
 	c.mu.Lock()
 	c.phone, c.codeHash, c.account = "", "", ""
+	c.codeVia, c.codeNext, c.emailCode = "", "", false
 	c.mu.Unlock()
 	c.kick()
 	return nil

@@ -139,6 +139,12 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
 .choice input { margin-top: .3rem; }
 .scroll { max-height: 220px; overflow: auto; font-size: .85rem; color: var(--muted); padding-left: 1.1rem; }
 
+.or { display: flex; align-items: center; gap: .6rem; color: var(--muted); font-size: .85rem; margin: 1rem 0 .8rem; }
+.or::before, .or::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+.qr { display: flex; justify-content: center; align-items: center; min-height: 260px; margin: .5rem 0; }
+.qr img { background: #fff; padding: 10px; border-radius: 8px; width: 260px; height: 260px; image-rendering: pixelated; }
+.code-actions { margin-top: .8rem; align-items: center; }
+
 .toast {
   position: fixed; left: 50%; bottom: 1.2rem; transform: translateX(-50%);
   background: var(--text); color: var(--bg); padding: .6rem 1rem; border-radius: 8px; max-width: calc(100vw - 2rem);
