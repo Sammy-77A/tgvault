@@ -110,6 +110,8 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("create schema: %w", err)
 	}
+	// Columns added after 0.1; the error just means the column already exists.
+	_, _ = db.Exec(`ALTER TABLE items ADD COLUMN failing_since INTEGER NOT NULL DEFAULT 0`)
 	return &Store{db: db}, nil
 }
 
@@ -472,8 +474,11 @@ func (s *Store) ClaimNext(quietFile, quietProject time.Duration) (Item, bool, er
 func (s *Store) FinishItem(id int64, state, note string, attempts int, nextAttempt, startedAt int64) error {
 	_, err := s.db.Exec(`UPDATE items SET
 		state = CASE WHEN ?=? AND changed_at>? THEN ? ELSE ? END,
+		failing_since = CASE WHEN ?=? THEN CASE failing_since WHEN 0 THEN ? ELSE failing_since END ELSE 0 END,
 		note=?, attempts=?, next_attempt=? WHERE id=?`,
-		state, StateSynced, startedAt, StatePending, state, note, attempts, nextAttempt, id)
+		state, StateSynced, startedAt, StatePending, state,
+		state, StateFailed, now(),
+		note, attempts, nextAttempt, id)
 	return err
 }
 
@@ -505,6 +510,16 @@ func (s *Store) RetryItem(id int64) error {
 func (s *Store) Activity(limit int) ([]Item, error) {
 	return s.queryItems(`WHERE state!=? ORDER BY CASE state WHEN ? THEN 0 WHEN ? THEN 1 WHEN ? THEN 2 ELSE 3 END, changed_at DESC LIMIT ?`,
 		StateSynced, StateUploading, StateFailed, StatePending, limit)
+}
+
+// StaleFailures counts local items that have been failing since before the
+// given time, and returns one example path.
+func (s *Store) StaleFailures(before int64) (int, string, error) {
+	var n int
+	var sample sql.NullString
+	err := s.db.QueryRow(`SELECT COUNT(*), MIN(cloud_path) FROM items
+		WHERE state=? AND local_present=1 AND failing_since>0 AND failing_since<?`, StateFailed, before).Scan(&n, &sample)
+	return n, sample.String, err
 }
 
 // ItemsByState returns local items in one state, most recently changed first.

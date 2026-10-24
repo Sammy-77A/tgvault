@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/Sammy-77A/tgvault/internal/backup"
+	"github.com/Sammy-77A/tgvault/internal/notify"
 	"github.com/Sammy-77A/tgvault/internal/store"
 	"github.com/Sammy-77A/tgvault/internal/tgclient"
 	"github.com/Sammy-77A/tgvault/internal/web"
@@ -81,10 +82,13 @@ func main() {
 	eng := backup.New(st, tg, dataDir)
 	tg.OnAccountChange(eng.ForgetAccount)
 	addr := fmt.Sprintf("127.0.0.1:%d", actualPort)
-	srv := web.New(st, tg, eng, token, addr, version, cancel)
+	pageURL := fmt.Sprintf("http://%s/?t=%s", addr, token)
+	nw := notify.New(st, tg, pageURL)
+	srv := web.New(st, tg, eng, nw, token, addr, version, cancel)
 
 	log.Printf("tgvault %s started; data in %s; page at http://%s", version, dataDir, addr)
 	go tg.Run(ctx)
+	go nw.Run(ctx)
 	go func() {
 		if err := eng.Run(ctx); err != nil {
 			log.Printf("engine: %v", err)
@@ -92,7 +96,7 @@ func main() {
 		}
 	}()
 	if !*background {
-		openBrowser(fmt.Sprintf("http://%s/?t=%s", addr, token))
+		openBrowser(pageURL)
 	}
 	if err := srv.Serve(ctx, listener); err != nil {
 		log.Printf("web: %v", err)

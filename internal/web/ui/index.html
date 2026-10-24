@@ -132,6 +132,11 @@
         <h2>Settings</h2>
         <label class="toggle"><input type="checkbox" id="autostart"> Start tgvault when I sign in to Windows (runs in the background)</label>
         <div class="setting">
+          <label class="toggle"><input type="checkbox" id="notify"> Notify me when something needs my attention</label>
+          <button id="testNotify">Send a test</button>
+        </div>
+        <p class="hint">Only for things that need you: logged out of Telegram, files failing for a day, a backup folder missing, or a new code project to confirm. At most once a day per problem.</p>
+        <div class="setting">
           <div><b>Check against Telegram</b><p class="hint" id="reconcileText">Re-reads the backup channel to find files added or deleted there.</p></div>
           <button id="reconcile">Check now</button>
         </div>

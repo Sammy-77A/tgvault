@@ -532,6 +532,7 @@ function activityRow(it, key) {
 
 function renderSettings() {
   $("autostart").checked = !!state.autostart;
+  $("notify").checked = !!state.notify;
   const tg = state.telegram;
   $("accountText").textContent = `Logged in as ${tg.account || "?"}. Files are stored in your private channel “${tg.channel}”.`;
   const rc = state.engine.reconcile;
@@ -568,6 +569,12 @@ document.addEventListener("DOMContentLoaded", () => {
   $("autostart").addEventListener("change", (ev) => api("/api/autostart", { on: ev.target.checked })
     .then(() => toast(ev.target.checked ? "tgvault will start when you sign in." : "Start-up turned off."))
     .catch((err) => { toast(err.message); refresh(); }));
+  $("notify").addEventListener("change", (ev) => api("/api/notify", { on: ev.target.checked })
+    .then(() => toast(ev.target.checked ? "Notifications on." : "Notifications off."))
+    .catch((err) => { toast(err.message); refresh(); }));
+  $("testNotify").addEventListener("click", () => api("/api/notify/test", {})
+    .then(() => toast("Sent. Look at the bottom-right of your screen."))
+    .catch((err) => toast(err.message)));
   $("reconcile").addEventListener("click", () => api("/api/reconcile", {}).then(() => { toast("Checking Telegram…"); refresh(); }));
   $("logout").addEventListener("click", () => dialog({
     title: "Log out of Telegram?",

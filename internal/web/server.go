@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/Sammy-77A/tgvault/internal/backup"
+	"github.com/Sammy-77A/tgvault/internal/notify"
 	"github.com/Sammy-77A/tgvault/internal/store"
 	"github.com/Sammy-77A/tgvault/internal/tgclient"
 )
@@ -38,11 +39,12 @@ type Server struct {
 	version string
 	quit    func()
 	mux     *http.ServeMux
+	notify  *notify.Watcher
 }
 
 // New creates the server. token protects the API; quit stops the app.
-func New(st *store.Store, tg *tgclient.Client, eng *backup.Engine, token, addr, version string, quit func()) *Server {
-	s := &Server{st: st, tg: tg, eng: eng, token: token, addr: addr, version: version, quit: quit, mux: http.NewServeMux()}
+func New(st *store.Store, tg *tgclient.Client, eng *backup.Engine, nw *notify.Watcher, token, addr, version string, quit func()) *Server {
+	s := &Server{st: st, tg: tg, eng: eng, notify: nw, token: token, addr: addr, version: version, quit: quit, mux: http.NewServeMux()}
 	s.routes()
 	return s
 }
@@ -143,6 +145,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/reconcile", s.reconcile)
 
 	s.mux.HandleFunc("POST /api/autostart", s.setAutostart)
+	s.mux.HandleFunc("POST /api/notify", s.setNotify)
+	s.mux.HandleFunc("POST /api/notify/test", s.testNotify)
 	s.mux.HandleFunc("POST /api/quit", s.quitApp)
 }
 
@@ -219,6 +223,7 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 		"roots":     roots,
 		"projects":  projects,
 		"autostart": autostartEnabled(),
+		"notify":    notify.Enabled(s.st),
 	})
 }
 
@@ -695,6 +700,33 @@ func (s *Server) setAutostart(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := setAutostart(body.On); err != nil {
 		fail(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, map[string]bool{"ok": true})
+}
+
+func (s *Server) setNotify(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		On bool `json:"on"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		fail(w, 400, "bad request")
+		return
+	}
+	v := "on"
+	if !body.On {
+		v = "off"
+	}
+	if err := s.st.Set(notify.SettingKey, v); err != nil {
+		fail(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, map[string]bool{"ok": true})
+}
+
+func (s *Server) testNotify(w http.ResponseWriter, r *http.Request) {
+	if err := s.notify.Test(); err != nil {
+		fail(w, 500, "couldn't show a notification: "+err.Error())
 		return
 	}
 	writeJSON(w, map[string]bool{"ok": true})
