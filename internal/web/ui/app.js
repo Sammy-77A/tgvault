@@ -222,20 +222,23 @@ function renderOverview() {
   const failed = c.failed || 0;
   const held = (state.projects || []).filter((p) => p.state === "suggested").length;
 
-  let icon = "✅", big = "Everything is backed up", sub = `${c.synced || 0} files and projects are safe in Telegram.`;
+  const n = (x) => x.toLocaleString();
+  const cool = e.cooldownUntil ? new Date(e.cooldownUntil * 1000) : null;
+  let icon = "✅", big = "Everything is backed up", sub = `${n(c.synced || 0)} files and projects are safe in Telegram.`;
   if (!state.roots || !state.roots.length) {
     icon = "📁"; big = "Add a folder to start"; sub = "Pick the folders you want backed up below.";
-  } else if (failed) {
-    icon = "⚠️"; big = `${failed} item${failed > 1 ? "s" : ""} could not be backed up yet`;
-    sub = "tgvault keeps retrying. See Activity for the reason.";
+  } else if (cool) {
+    const mins = Math.max(1, Math.ceil((cool - Date.now()) / 60000));
+    icon = "⏳"; big = `Pausing for Telegram's speed limit — resumes at ${cool.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+    sub = `Telegram limits how fast one account can send files. Nothing is wrong; tgvault waits about ${mins} min and then continues by itself. ${n(waiting)} item${waiting === 1 ? "" : "s"} queued.`;
   } else if (waiting) {
-    icon = "⏫"; big = `Backing up ${waiting} item${waiting > 1 ? "s" : ""}`;
-    sub = "Files upload after they have been unchanged for a few seconds; projects after 5 minutes.";
+    icon = "⏫"; big = `Backing up ${n(waiting)} item${waiting === 1 ? "" : "s"}`;
+    sub = "Files go up a few at a time to stay within Telegram's speed limit.";
   } else if (e.scanning) {
     icon = "🔎"; big = "Checking your folders for changes"; sub = "";
   }
-  if (state.telegram.floodEnd) {
-    sub += ` Telegram asked to slow down until ${new Date(state.telegram.floodEnd * 1000).toLocaleTimeString()}.`;
+  if (failed && state.roots && state.roots.length) {
+    sub += ` ${n(failed)} item${failed === 1 ? " needs" : "s need"} attention — see Activity.`;
   }
 
   const ups = uploading.sort((a, b) => a.cloudPath.localeCompare(b.cloudPath)).map((u) => {
@@ -355,6 +358,7 @@ async function loadCloud() {
     el("button", { class: "small", onclick: () => restore(cloudPath, true) }, "Restore folder"),
     el("a", { class: "btn small", href: `/api/download-zip?path=${encodeURIComponent(cloudPath)}` }, "Download ZIP"),
     el("button", { class: "small", onclick: () => freeSpace(cloudPath) }, "Free up space"),
+    el("button", { class: "small danger", onclick: () => removeFromBackup(cloudPath) }, "Remove from backup"),
   ] : []);
 
   $("cloudEmpty").hidden = data.entries.length > 0;
@@ -370,6 +374,7 @@ async function loadCloud() {
       el("button", { class: "small", onclick: (ev) => { ev.stopPropagation(); restore(e.path, false); } }, "Restore"),
       e.versions > 1 ? el("button", { class: "small", onclick: (ev) => { ev.stopPropagation(); showVersions(e); } }, "Versions") : null,
       e.local === "same" ? el("button", { class: "small", onclick: (ev) => { ev.stopPropagation(); freeSpace(e.path); } }, "Free up space") : null,
+      e.local === "cloud-only" ? el("button", { class: "small danger", onclick: (ev) => { ev.stopPropagation(); removeFromBackup(e.path); } }, "Remove from backup") : null,
     ];
     return el("li", { class: isFolder ? "clickable" : "", onclick: isFolder ? () => openCloud(e.path) : null },
       el("span", { class: "icon" }, icon),
@@ -437,6 +442,23 @@ async function freeSpace(path) {
   });
 }
 
+async function removeFromBackup(path) {
+  await dialog({
+    title: "Remove from backup?",
+    body: el("div", {},
+      el("p", {}, `Permanently delete ${path} and all its versions from your Telegram backup channel.`),
+      el("p", { class: "hint" }, "This can't be undone. Files on this PC are not touched. It only works for things no longer being backed up from this PC.")),
+    buttons: [{ label: "Cancel", value: null }, { label: "Delete from Telegram", value: "go", danger: true }],
+    run: async () => {
+      await api("/api/delete-cloud", { path });
+      toast("Removing; progress is on the Overview tab.");
+      if (cloudPath === path) cloudPath = path.split("/").slice(0, -1).join("/");
+      refresh();
+      loadCloud();
+    },
+  });
+}
+
 async function showVersions(entry) {
   let vs;
   try { vs = await api(`/api/versions?path=${encodeURIComponent(entry.path)}`); } catch (err) { toast(err.message); return; }
@@ -455,26 +477,55 @@ const stateLabels = {
   failed: ["Problem", "bad"], skipped: ["Skipped", "warn"],
 };
 
+const activityGroups = [
+  ["uploading", "Uploading now", "Files being sent right now."],
+  ["failed", "Needs attention", "These failed for a reason other than Telegram's speed limit. tgvault keeps retrying them."],
+  ["pending", "Queued", "Waiting their turn. Files upload a few at a time to stay within Telegram's speed limit."],
+  ["skipped", "Not backed up", "tgvault won't upload these (for example files over 2 GB)."],
+];
+
 async function loadActivity() {
-  let items;
-  try { items = await api("/api/activity"); } catch (err) { toast(err.message); return; }
-  items = items || [];
-  $("activityEmpty").hidden = items.length > 0;
-  replace($("activity"), items.map((it) => {
-    const [label, cls] = stateLabels[it.state] || [it.state, "info"];
-    let note = it.note;
-    if (it.state === "failed" && it.nextAttempt) {
-      note += ` (next try ${new Date(it.nextAttempt * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })})`;
+  let data;
+  try { data = await api("/api/activity"); } catch (err) { toast(err.message); return; }
+  const counts = data.counts || {};
+  const cool = state && state.engine.cooldownUntil;
+  let any = false;
+  const sections = activityGroups.map(([key, title, hint]) => {
+    const items = data[key] || [];
+    const total = counts[key] || items.length;
+    if (!total) return null;
+    any = true;
+    let extra = hint;
+    if (key === "pending" && cool) {
+      extra = `Paused for Telegram's speed limit until ${new Date(cool * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}; this is normal.`;
     }
-    return el("li", {},
-      el("span", { class: "icon" }, it.kind === "project" ? "📦" : "📄"),
-      el("div", { class: "grow" },
-        el("div", { class: "name" }, it.cloudPath),
-        el("div", { class: "sub" }, el("span", { class: `pill ${cls}` }, label), " ", bytes(it.size), note ? ` · ${note}` : "")),
-      it.state === "failed" || it.state === "skipped"
-        ? el("button", { class: "small", onclick: () => api(`/api/items/${it.id}/retry`, {}).then(() => { toast("Will try again shortly."); loadActivity(); }) }, "Retry")
-        : null);
-  }));
+    return el("section", { class: "group" },
+      el("div", { class: "row-head" },
+        el("h2", {}, `${title} `, el("span", { class: "count" }, total.toLocaleString())),
+        key === "failed" ? el("button", { class: "small", onclick: () => api("/api/retry-all", {}).then(() => { toast("Retrying now."); loadActivity(); }) }, "Retry all now") : null),
+      el("p", { class: "hint" }, extra),
+      el("ul", { class: "list" }, items.map((it) => activityRow(it, key))),
+      total > items.length ? el("p", { class: "hint" }, `…and ${(total - items.length).toLocaleString()} more.`) : null);
+  });
+  $("activityEmpty").hidden = any;
+  replace($("activity"), sections);
+}
+
+function activityRow(it, key) {
+  let note = it.note || "";
+  if (key === "failed" && it.nextAttempt) {
+    note += ` (next try ${new Date(it.nextAttempt * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })})`;
+  }
+  const up = key === "uploading" && state && (state.engine.uploading || []).find((u) => u.itemId === it.id);
+  if (up && up.total) note = `${bytes(up.done)} of ${bytes(up.total)}`;
+  return el("li", {},
+    el("span", { class: "icon" }, it.kind === "project" ? "📦" : "📄"),
+    el("div", { class: "grow" },
+      el("div", { class: "name" }, it.cloudPath),
+      el("div", { class: "sub" }, bytes(it.size), note ? ` · ${note}` : "")),
+    key === "failed" || key === "skipped"
+      ? el("button", { class: "small", onclick: () => api(`/api/items/${it.id}/retry`, {}).then(() => { toast("Will try again shortly."); loadActivity(); }) }, "Retry")
+      : null);
 }
 
 // ---------- settings ----------
@@ -514,7 +565,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
   for (const b of document.querySelectorAll(".tabs button")) b.addEventListener("click", () => showTab(b.dataset.tab));
   $("addFolder").addEventListener("click", addFolder);
-  $("retryAll").addEventListener("click", () => api("/api/retry-all", {}).then(() => { toast("Retrying now."); loadActivity(); }));
   $("autostart").addEventListener("change", (ev) => api("/api/autostart", { on: ev.target.checked })
     .then(() => toast(ev.target.checked ? "tgvault will start when you sign in." : "Start-up turned off."))
     .catch((err) => { toast(err.message); refresh(); }));

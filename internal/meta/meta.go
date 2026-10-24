@@ -141,6 +141,10 @@ var alwaysSkipDirs = map[string]bool{
 	".angular":                  true,
 	"$RECYCLE.BIN":              true,
 	"System Volume Information": true,
+	// Temporary folders of other sync apps; their contents are never real files.
+	".tmp.driveupload":   true, // Google Drive
+	".tmp.drivedownload": true, // Google Drive
+	".dropbox.cache":     true,
 }
 
 // SkipDir reports whether a folder should be skipped because its contents can

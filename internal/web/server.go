@@ -138,6 +138,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/restore", s.restore)
 	s.mux.HandleFunc("GET /api/free-plan", s.freePlan)
 	s.mux.HandleFunc("POST /api/free", s.free)
+	s.mux.HandleFunc("POST /api/delete-cloud", s.deleteCloud)
 	s.mux.HandleFunc("POST /api/tasks/{id}/dismiss", s.dismissTask)
 	s.mux.HandleFunc("POST /api/reconcile", s.reconcile)
 
@@ -443,13 +444,21 @@ func (s *Server) setProject(w http.ResponseWriter, r *http.Request) {
 
 // ---- activity ----
 
+// activity returns items grouped by state, each list capped so the page
+// stays fast with thousands of queued files.
 func (s *Server) activity(w http.ResponseWriter, r *http.Request) {
-	items, err := s.st.Activity(300)
-	if err != nil {
-		fail(w, 500, err.Error())
-		return
+	out := map[string]any{}
+	for _, st := range []string{store.StateUploading, store.StateFailed, store.StatePending, store.StateSkipped} {
+		items, err := s.st.ItemsByState(st, 100)
+		if err != nil {
+			fail(w, 500, err.Error())
+			return
+		}
+		out[st] = items
 	}
-	writeJSON(w, items)
+	counts, _ := s.st.Counts()
+	out["counts"] = counts
+	writeJSON(w, out)
 }
 
 func (s *Server) retryItem(w http.ResponseWriter, r *http.Request) {
@@ -631,6 +640,27 @@ func (s *Server) free(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, err := s.eng.FreeSpace(context.Background(), p)
+	if err != nil {
+		fail(w, 400, err.Error())
+		return
+	}
+	writeJSON(w, map[string]int64{"task": id})
+}
+
+func (s *Server) deleteCloud(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Path string `json:"path"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		fail(w, 400, "bad request")
+		return
+	}
+	p, ok := cleanCloudPath(body.Path)
+	if !ok || p == "" {
+		fail(w, 400, "bad path")
+		return
+	}
+	id, err := s.eng.DeleteFromCloud(context.Background(), p)
 	if err != nil {
 		fail(w, 400, err.Error())
 		return

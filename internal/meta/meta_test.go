@@ -75,7 +75,8 @@ func TestSkipDir(t *testing.T) {
 		want    bool
 	}{
 		{"node_modules", nil, no, true},
-		{"vendor", nil, no, false}, // could be a real folder outside projects
+		{".tmp.driveupload", nil, no, true}, // Google Drive's temp folder
+		{"vendor", nil, no, false},          // could be a real folder outside projects
 		{"vendor", map[string]bool{"composer.json": true}, no, true},
 		{"build", nil, no, false},
 		{"build", map[string]bool{"build.gradle": true}, no, true},

@@ -81,6 +81,10 @@ type Client struct {
 	account   string
 	online    bool
 	floodEnd  time.Time
+	sendMu    sync.Mutex // paces posts to the channel
+	lastSend  time.Time
+	sendGap   time.Duration
+	sendOK    int
 	codeVia   string
 	codeNext  string
 	emailCode bool

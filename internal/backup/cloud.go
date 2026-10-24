@@ -17,6 +17,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gotd/td/tgerr"
+
 	"github.com/Sammy-77A/tgvault/internal/meta"
 	"github.com/Sammy-77A/tgvault/internal/store"
 	"github.com/Sammy-77A/tgvault/internal/tgclient"
@@ -591,6 +593,62 @@ func (e *Engine) zipProject(ctx context.Context, zw *zip.Writer, v store.Version
 		}
 	}
 	return nil
+}
+
+// ---- removing things from the backup ----
+
+// DeleteFromCloud permanently deletes every stored version at or inside
+// prefix from Telegram. It refuses while any of those files are still being
+// backed up from this PC, because they would simply be uploaded again.
+func (e *Engine) DeleteFromCloud(ctx context.Context, prefix string) (int64, error) {
+	if prefix == "" {
+		return 0, errors.New("choose a folder or file to remove")
+	}
+	items, err := e.st.ItemsUnder(prefix)
+	if err != nil {
+		return 0, err
+	}
+	for _, it := range items {
+		if it.LocalPresent && it.State != store.StateSkipped {
+			return 0, fmt.Errorf("%s is still on this PC and being backed up; stop backing up its folder (or delete it locally) first", it.CloudPath)
+		}
+	}
+	versions, err := e.st.VersionsUnder(prefix)
+	if err != nil {
+		return 0, err
+	}
+	if len(versions) == 0 {
+		return 0, errors.New("nothing stored there")
+	}
+	t := e.newTask("delete", "Removing "+prefix+" from the backup")
+	t.update(func(t *Task) { t.Total = len(versions) })
+	go func() {
+		ctx := context.WithoutCancel(ctx)
+		for i := 0; i < len(versions); i += 100 {
+			batch := versions[i:min(i+100, len(versions))]
+			ids := make([]int, len(batch))
+			for j, v := range batch {
+				ids[j] = v.MsgID
+			}
+			err := e.tg.DeleteMessages(ctx, ids)
+			if d, ok := tgerr.AsFloodWait(err); ok {
+				time.Sleep(d + time.Second)
+				err = e.tg.DeleteMessages(ctx, ids)
+			}
+			if err != nil {
+				t.update(func(t *Task) {
+					t.Errors = append(t.Errors, "stopped: "+tgclient.Friendly(err))
+					t.Finished = true
+				})
+				return
+			}
+			_ = e.st.DeleteVersions(ids)
+			t.update(func(t *Task) { t.Done += len(ids) })
+		}
+		_ = e.st.ForgetGoneUnder(prefix)
+		t.update(func(t *Task) { t.Finished = true })
+	}()
+	return t.ID, nil
 }
 
 // ---- freeing up space ----

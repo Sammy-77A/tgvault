@@ -145,6 +145,10 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
 .qr img { background: #fff; padding: 10px; border-radius: 8px; width: 260px; height: 260px; image-rendering: pixelated; }
 .code-actions { margin-top: .8rem; align-items: center; }
 
+.group + .group { margin-top: 1.4rem; padding-top: 1rem; border-top: 1px solid var(--line); }
+.group .hint { margin-top: 0; }
+.count { color: var(--muted); font-weight: 400; }
+
 .toast {
   position: fixed; left: 50%; bottom: 1.2rem; transform: translateX(-50%);
   background: var(--text); color: var(--bg); padding: .6rem 1rem; border-radius: 8px; max-width: calc(100vw - 2rem);

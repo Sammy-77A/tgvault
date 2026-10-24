@@ -52,6 +52,9 @@ type Engine struct {
 	pending   map[int64]*time.Timer
 	tasks     []*Task
 	reconcile Reconcile
+	// Telegram rate limits apply to the whole account, so when one upload is
+	// told to wait, every upload waits until cooldown.
+	cooldown time.Time
 }
 
 // Progress of an item being uploaded.
@@ -61,6 +64,7 @@ type Progress struct {
 	Phase     string `json:"phase"`
 	Done      int64  `json:"done"`
 	Total     int64  `json:"total"`
+	updated   time.Time
 }
 
 // Reconcile is the state of the last "check against Telegram".
@@ -266,6 +270,14 @@ func (e *Engine) workerLoop(ctx context.Context) {
 		if err := e.tg.WaitReady(ctx); err != nil {
 			return
 		}
+		if d := time.Until(e.cooldownEnd()); d > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(d):
+			}
+			continue
+		}
 		it, ok, err := e.st.ClaimNext(quietFile, quietProject)
 		if err != nil {
 			log.Printf("queue: %v", err)
@@ -284,9 +296,34 @@ func (e *Engine) workerLoop(ctx context.Context) {
 }
 
 func (e *Engine) setProgress(p Progress) {
+	p.updated = time.Now()
 	e.mu.Lock()
 	e.progress[p.ItemID] = p
 	e.mu.Unlock()
+}
+
+func (e *Engine) lastActivity(id int64) time.Time {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.progress[id].updated
+}
+
+func (e *Engine) cooldownEnd() time.Time {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.cooldown
+}
+
+// startCooldown pauses all uploads until Telegram's limit has passed.
+func (e *Engine) startCooldown(d time.Duration) time.Time {
+	end := time.Now().Add(d + 5*time.Second)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if end.After(e.cooldown) {
+		e.cooldown = end
+		log.Printf("Telegram rate limit: pausing uploads until %s", end.Format("15:04:05"))
+	}
+	return e.cooldown
 }
 
 func (e *Engine) clearProgress(id int64) {
@@ -301,6 +338,7 @@ type outcome struct {
 	note  string
 	retry time.Duration // for failures; 0 = use backoff
 	count bool          // whether this failure counts toward the backoff
+	wait  time.Time     // rate-limited: stay pending until then (not an error)
 }
 
 func (e *Engine) process(ctx context.Context, it store.Item) {
@@ -314,14 +352,15 @@ func (e *Engine) process(ctx context.Context, it store.Item) {
 		out = outcome{state: store.StateFailed, note: "its backup folder was removed", count: true}
 	} else {
 		abs := filepath.Join(root.Path, filepath.FromSlash(it.Rel))
-		limit := 30*time.Minute + time.Duration(it.Size/(50*1024))*time.Second
-		ictx, cancel := context.WithTimeout(ctx, limit)
+		ictx, cancel := context.WithCancelCause(ctx)
+		stop := e.watchStall(ictx, it.ID, cancel)
 		if it.Kind == store.KindProject {
 			out = e.uploadProject(ictx, it, abs)
 		} else {
 			out = e.uploadFile(ictx, it, abs)
 		}
-		cancel()
+		stop()
+		cancel(nil)
 		if ctx.Err() != nil {
 			// Shutting down: leave it for next start.
 			_ = e.st.FinishItem(it.ID, store.StatePending, "", it.Attempts, 0, started)
@@ -330,7 +369,9 @@ func (e *Engine) process(ctx context.Context, it store.Item) {
 	}
 
 	attempts, next := it.Attempts, int64(0)
-	if out.state == store.StateFailed {
+	if !out.wait.IsZero() {
+		out.state, next = store.StatePending, out.wait.Unix()
+	} else if out.state == store.StateFailed {
 		if out.count {
 			attempts++
 		}
@@ -348,6 +389,45 @@ func (e *Engine) process(ctx context.Context, it store.Item) {
 	}
 }
 
+// errStalled cancels an upload that has made no progress for a long time.
+var errStalled = errors.New("no progress for 10 minutes")
+
+// watchStall cancels the item's work if it stops making progress. Slow but
+// moving uploads are never cut off.
+func (e *Engine) watchStall(ctx context.Context, id int64, cancel context.CancelCauseFunc) (stop func()) {
+	done, exited := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(exited)
+		t := time.NewTicker(30 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				// Time spent waiting out a rate limit is not a stall.
+				if time.Now().Before(e.cooldownEnd()) {
+					e.setProgress(e.progressOf(id))
+					continue
+				}
+				if time.Since(e.lastActivity(id)) > 10*time.Minute {
+					cancel(errStalled)
+					return
+				}
+			}
+		}
+	}()
+	return func() { close(done); <-exited }
+}
+
+func (e *Engine) progressOf(id int64) Progress {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.progress[id]
+}
+
 func backoff(attempts int) time.Duration {
 	d := 30 * time.Second
 	for i := 1; i < attempts && d < time.Hour; i++ {
@@ -357,14 +437,15 @@ func backoff(attempts int) time.Duration {
 }
 
 // failure converts an error into an outcome with a plain-language note.
-func failure(err error) outcome {
+func (e *Engine) failure(ctx context.Context, err error) outcome {
 	if d, ok := tgerr.AsFloodWait(err); ok {
-		at := time.Now().Add(d + 5*time.Second)
-		return outcome{state: store.StateFailed, retry: d + 5*time.Second,
-			note: "Telegram asked tgvault to slow down; continuing at " + at.Format("15:04")}
+		return outcome{wait: e.startCooldown(d)}
 	}
-	if errors.Is(err, context.DeadlineExceeded) {
-		return outcome{state: store.StateFailed, note: "took too long (slow connection?); will try again", count: true}
+	if errors.Is(context.Cause(ctx), errStalled) {
+		return outcome{state: store.StateFailed, note: "the upload stopped making progress (connection problem?); will try again", count: true}
+	}
+	if isConnErr(err) {
+		return outcome{state: store.StateFailed, retry: 30 * time.Second, note: "the connection to Telegram dropped; will try again"}
 	}
 	if isInUse(err) {
 		return outcome{state: store.StateFailed, note: "the file is open in another program; will try again", count: true}
@@ -373,6 +454,16 @@ func failure(err error) outcome {
 		return outcome{state: store.StateFailed, retry: 30 * time.Second, note: "waiting for the Telegram connection"}
 	}
 	return outcome{state: store.StateFailed, note: tgclient.Friendly(err), count: true}
+}
+
+func isConnErr(err error) bool {
+	msg := strings.ToLower(err.Error())
+	for _, s := range []string{"connection was aborted", "connection reset", "broken pipe", "i/o timeout", "eof", "connection refused", "no such host"} {
+		if strings.Contains(msg, s) {
+			return true
+		}
+	}
+	return false
 }
 
 func isInUse(err error) bool {
@@ -401,7 +492,7 @@ func (e *Engine) uploadFile(ctx context.Context, it store.Item, abs string) outc
 		return outcome{state: store.StateSynced}
 	}
 	if err != nil {
-		return failure(err)
+		return e.failure(ctx, err)
 	}
 	if fi.Size() > meta.MaxFileSize {
 		return outcome{state: store.StateSkipped, note: "over 2 GB; Telegram can't store files this big yet"}
@@ -412,7 +503,7 @@ func (e *Engine) uploadFile(ctx context.Context, it store.Item, abs string) outc
 	e.setProgress(Progress{ItemID: it.ID, CloudPath: it.CloudPath, Phase: "reading", Total: fi.Size()})
 	hash, err := hashFile(abs)
 	if err != nil {
-		return failure(err)
+		return e.failure(ctx, err)
 	}
 	if latest, ok, _ := e.st.LatestVersion(it.CloudPath); ok && latest.Hash == hash {
 		return outcome{state: store.StateSynced} // content already in Telegram
@@ -423,7 +514,7 @@ func (e *Engine) uploadFile(ctx context.Context, it store.Item, abs string) outc
 	}
 	msgID, err := e.send(ctx, it, abs, path.Base(it.CloudPath), fi.Size(), hash, caption)
 	if err != nil {
-		return failure(err)
+		return e.failure(ctx, err)
 	}
 	// If the file changed while it was uploading, the copy may be inconsistent.
 	if after, err := os.Stat(abs); err != nil || after.Size() != fi.Size() || !after.ModTime().Equal(fi.ModTime()) {
@@ -500,21 +591,21 @@ func (e *Engine) uploadProject(ctx context.Context, it store.Item, abs string) o
 	defer os.Remove(tmp)
 	skipped, err := writeProjectZip(ctx, tmp, files)
 	if err != nil {
-		return failure(err)
+		return e.failure(ctx, err)
 	}
 	if after, _, _ := projectFingerprint(abs); after != fp {
 		return outcome{state: store.StateFailed, retry: quietProject, note: "the project changed while zipping; will try again"}
 	}
 	fi, err := os.Stat(tmp)
 	if err != nil {
-		return failure(err)
+		return e.failure(ctx, err)
 	}
 	if fi.Size() > meta.MaxFileSize {
 		return outcome{state: store.StateSkipped, note: "the project ZIP is over 2 GB; too big for Telegram"}
 	}
 	hash, err := hashFile(tmp)
 	if err != nil {
-		return failure(err)
+		return e.failure(ctx, err)
 	}
 	caption, err := meta.Caption(meta.Info{Kind: "p", Path: it.CloudPath, Size: fi.Size(), Mt: mtime, Hash: hash, FP: fp})
 	if err != nil {
@@ -522,7 +613,7 @@ func (e *Engine) uploadProject(ctx context.Context, it store.Item, abs string) o
 	}
 	msgID, err := e.send(ctx, it, tmp, path.Base(it.CloudPath)+".zip", fi.Size(), hash, caption)
 	if err != nil {
-		return failure(err)
+		return e.failure(ctx, err)
 	}
 	note := ""
 	if skipped > 0 {
@@ -575,6 +666,8 @@ type Status struct {
 	Scanning  bool           `json:"scanning"`
 	Tasks     []TaskView     `json:"tasks"`
 	Reconcile Reconcile      `json:"reconcile"`
+	// CooldownUntil is set while Telegram's rate limit has paused uploads.
+	CooldownUntil int64 `json:"cooldownUntil,omitempty"`
 }
 
 // Status returns current activity.
@@ -583,6 +676,9 @@ func (e *Engine) Status() Status {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	s := Status{Counts: counts, Scanning: e.scanning, Reconcile: e.reconcile}
+	if time.Now().Before(e.cooldown) {
+		s.CooldownUntil = e.cooldown.Unix()
+	}
 	for _, p := range e.progress {
 		s.Uploading = append(s.Uploading, p)
 	}

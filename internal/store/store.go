@@ -479,7 +479,12 @@ func (s *Store) FinishItem(id int64, state, note string, attempts int, nextAttem
 
 // ResetUploading returns interrupted uploads to pending (used at startup).
 func (s *Store) ResetUploading() error {
-	_, err := s.db.Exec(`UPDATE items SET state=? WHERE state=?`, StatePending, StateUploading)
+	if _, err := s.db.Exec(`UPDATE items SET state=? WHERE state=?`, StatePending, StateUploading); err != nil {
+		return err
+	}
+	// Older versions recorded Telegram rate limits as failures; they are just waits.
+	_, err := s.db.Exec(`UPDATE items SET state=?, note='', attempts=0, next_attempt=0
+		WHERE state=? AND note LIKE 'Telegram asked tgvault to slow down%'`, StatePending, StateFailed)
 	return err
 }
 
@@ -500,6 +505,18 @@ func (s *Store) RetryItem(id int64) error {
 func (s *Store) Activity(limit int) ([]Item, error) {
 	return s.queryItems(`WHERE state!=? ORDER BY CASE state WHEN ? THEN 0 WHEN ? THEN 1 WHEN ? THEN 2 ELSE 3 END, changed_at DESC LIMIT ?`,
 		StateSynced, StateUploading, StateFailed, StatePending, limit)
+}
+
+// ItemsByState returns local items in one state, most recently changed first.
+func (s *Store) ItemsByState(state string, limit int) ([]Item, error) {
+	return s.queryItems(`WHERE state=? AND local_present=1 ORDER BY changed_at DESC LIMIT ?`, state, limit)
+}
+
+// ForgetGoneUnder removes cloud-only items under a prefix (after their cloud copies are deleted).
+func (s *Store) ForgetGoneUnder(prefix string) error {
+	_, err := s.db.Exec(`DELETE FROM items WHERE local_present=0 AND (cloud_path=? OR substr(cloud_path,1,?)=?)`,
+		prefix, len(prefix)+1, prefix+"/")
+	return err
 }
 
 // Counts returns the number of items per state (only items present locally).
@@ -609,6 +626,11 @@ func (s *Store) LatestUnder(prefix string) ([]Version, error) {
 		}
 	}
 	return out, nil
+}
+
+// VersionsUnder returns every version (not just the latest) at or inside prefix.
+func (s *Store) VersionsUnder(prefix string) ([]Version, error) {
+	return s.queryVersions(`WHERE cloud_path=? OR substr(cloud_path,1,?)=? ORDER BY msg_id`, prefix, len(prefix)+1, prefix+"/")
 }
 
 // VersionCounts returns path -> number of stored versions.

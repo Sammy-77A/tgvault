@@ -262,3 +262,27 @@ func TestRestoredName(t *testing.T) {
 		t.Fatalf("got %s", got)
 	}
 }
+
+func TestOldRateLimitFailuresBecomeQueued(t *testing.T) {
+	_, st := newTestEngine(t)
+	root, _ := st.AddRoot(t.TempDir(), "R")
+	st.UpsertSeen(store.Item{Kind: store.KindFile, CloudPath: "R/a", RootID: root.ID, Rel: "a", Size: 1, Mtime: 1})
+	it, _, _ := st.ClaimNext(0, 0)
+	st.FinishItem(it.ID, store.StateFailed, "Telegram asked tgvault to slow down; continuing at 05:56", 3, time.Now().Add(time.Hour).Unix(), time.Now().Unix())
+	if err := st.ResetUploading(); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := st.Item(it.ID)
+	if got.State != store.StatePending || got.Attempts != 0 || got.NextAttempt != 0 {
+		t.Fatalf("rate-limited item should be queued, got %+v", got)
+	}
+}
+
+func TestStartCooldownKeepsLatestEnd(t *testing.T) {
+	e, _ := newTestEngine(t)
+	long := e.startCooldown(10 * time.Minute)
+	short := e.startCooldown(time.Minute)
+	if !short.Equal(long) || time.Until(e.cooldownEnd()) < 9*time.Minute {
+		t.Fatal("a shorter wait must not cut an active pause short")
+	}
+}

@@ -73,6 +73,9 @@ func (c *Client) Upload(ctx context.Context, req UploadRequest) (int, error) {
 	if mt == "" {
 		mt = "application/octet-stream"
 	}
+	if err := c.pace(ctx); err != nil {
+		return 0, err
+	}
 	randomID := randInt64()
 	upd, err := api.MessagesSendMedia(ctx, &tg.MessagesSendMediaRequest{
 		Peer: &tg.InputPeerChannel{ChannelID: ch.ChannelID, AccessHash: ch.AccessHash},
@@ -86,6 +89,7 @@ func (c *Client) Upload(ctx context.Context, req UploadRequest) (int, error) {
 		RandomID: randomID,
 		Silent:   true,
 	})
+	c.paced(err)
 	if err != nil {
 		if isPartMissing(err) {
 			return 0, ErrPartsExpired
@@ -97,6 +101,49 @@ func (c *Client) Upload(ctx context.Context, req UploadRequest) (int, error) {
 		return 0, errors.New("Telegram accepted the file but did not return its message ID")
 	}
 	return id, nil
+}
+
+// Telegram limits how often an account may post. Spacing posts out avoids
+// hitting the limit (which costs a long forced pause) in the first place.
+const (
+	minSendGap = 3 * time.Second
+	maxSendGap = 30 * time.Second
+)
+
+// pace waits until the next post is allowed.
+func (c *Client) pace(ctx context.Context) error {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+	if c.sendGap == 0 {
+		c.sendGap = minSendGap
+	}
+	if wait := time.Until(c.lastSend.Add(c.sendGap)); wait > 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(wait):
+		}
+	}
+	c.lastSend = time.Now()
+	return nil
+}
+
+// paced adapts the spacing: slower after a rate limit, slowly faster after successes.
+func (c *Client) paced(err error) {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+	if _, flood := tgerr.AsFloodWait(err); flood {
+		c.sendGap = min(c.sendGap*2, maxSendGap)
+		c.sendOK = 0
+		return
+	}
+	if err == nil {
+		c.sendOK++
+		if c.sendOK >= 25 && c.sendGap > minSendGap {
+			c.sendGap = max(c.sendGap*9/10, minSendGap)
+			c.sendOK = 0
+		}
+	}
 }
 
 // isPartMissing matches FILE_PART_<n>_MISSING and FILE_PARTS_INVALID.
