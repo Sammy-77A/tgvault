@@ -144,6 +144,7 @@ function render() {
 
 let lastStep = "";
 let lastQR = "";
+const onPhone = /Android/i.test(navigator.userAgent);
 let lastServerError = "";
 function renderLogin(tg) {
   const steps = {
@@ -176,6 +177,9 @@ function renderLogin(tg) {
     $("qrImg").hidden = !url;
     $("qrWait").hidden = !!url;
     if (url) $("qrImg").src = `/api/login/qr.png?v=${Date.now()}`;
+    // On a phone the QR code can't be scanned; the same tg://login link can be opened instead.
+    $("qrPhone").hidden = !(url && onPhone);
+    if (url) $("qrOpen").href = url;
   }
 }
 

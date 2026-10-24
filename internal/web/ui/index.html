@@ -52,6 +52,11 @@
       </ol>
       <div class="qr"><img id="qrImg" alt="Login QR code" hidden><span id="qrWait">Getting a code from Telegram…</span></div>
       <p class="hint">The code refreshes by itself every half minute.</p>
+      <div id="qrPhone" hidden>
+        <p>On this phone, you can't scan your own screen. Try this instead:</p>
+        <a class="btn primary" id="qrOpen" href="#">Log in with the Telegram app</a>
+        <p class="hint">Telegram should ask you to confirm the login. If nothing happens, log in with your phone number below.</p>
+      </div>
       <button class="link" id="cancelQR" type="button">Log in with a phone number instead</button>
     </div>
     <div id="step-code" class="step" hidden>

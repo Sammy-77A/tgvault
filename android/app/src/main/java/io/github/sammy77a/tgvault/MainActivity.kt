@@ -1,9 +1,13 @@
 package io.github.sammy77a.tgvault
 
 import android.app.Activity
+import android.content.ActivityNotFoundException
+import android.content.Intent
 import android.os.Bundle
+import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.Toast
 import android.widget.TextView
 import java.io.File
 import kotlin.concurrent.thread
@@ -18,7 +22,18 @@ class MainActivity : Activity() {
         web = WebView(this).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
-            webViewClient = WebViewClient()
+            webViewClient = object : WebViewClient() {
+                // tgvault's own page stays here; other links (tg://login, websites) open in their apps.
+                override fun shouldOverrideUrlLoading(view: WebView, req: WebResourceRequest): Boolean {
+                    if (req.url.host == "127.0.0.1") return false
+                    try {
+                        startActivity(Intent(Intent.ACTION_VIEW, req.url))
+                    } catch (e: ActivityNotFoundException) {
+                        Toast.makeText(this@MainActivity, "No app can open this link", Toast.LENGTH_SHORT).show()
+                    }
+                    return true
+                }
+            }
         }
         setContentView(web)
         val dataDir = File(filesDir, "tgvault").absolutePath

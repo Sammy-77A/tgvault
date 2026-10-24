@@ -81,7 +81,7 @@ button, a.btn {
   border: 1px solid var(--line); background: var(--card); color: var(--text);
 }
 button:hover, a.btn:hover { border-color: var(--accent); }
-button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
+button.primary, a.btn.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
 button.danger { color: var(--bad); }
 button.link { border: 0; background: none; color: var(--accent); padding: .3rem 0; }
 button:disabled { opacity: .5; cursor: default; }
