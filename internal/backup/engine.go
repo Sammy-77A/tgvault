@@ -54,7 +54,9 @@ type Engine struct {
 	reconcile Reconcile
 	// Telegram rate limits apply to the whole account, so when one upload is
 	// told to wait, every upload waits until cooldown.
-	cooldown time.Time
+	cooldown   time.Time
+	cfg        Config
+	conditions Conditions
 }
 
 // Progress of an item being uploaded.
@@ -269,6 +271,15 @@ func (e *Engine) workerLoop(ctx context.Context) {
 	for ctx.Err() == nil {
 		if err := e.tg.WaitReady(ctx); err != nil {
 			return
+		}
+		if e.Blocked() != "" {
+			select {
+			case <-ctx.Done():
+				return
+			case <-e.wake: // conditions changed
+			case <-time.After(30 * time.Second): // settings may have changed
+			}
+			continue
 		}
 		if d := time.Until(e.cooldownEnd()); d > 0 {
 			select {
@@ -508,7 +519,7 @@ func (e *Engine) uploadFile(ctx context.Context, it store.Item, abs string) outc
 	if latest, ok, _ := e.st.LatestVersion(it.CloudPath); ok && latest.Hash == hash {
 		return outcome{state: store.StateSynced} // content already in Telegram
 	}
-	caption, err := meta.Caption(meta.Info{Kind: "f", Path: it.CloudPath, Size: fi.Size(), Mt: fi.ModTime().Unix(), Hash: hash})
+	caption, err := meta.Caption(meta.Info{Kind: "f", Path: it.CloudPath, Size: fi.Size(), Mt: fi.ModTime().Unix(), Hash: hash, Dev: e.Device()})
 	if err != nil {
 		return outcome{state: store.StateSkipped, note: err.Error()}
 	}
@@ -617,7 +628,7 @@ func (e *Engine) uploadProject(ctx context.Context, it store.Item, abs string) o
 	if err != nil {
 		return e.failure(ctx, err)
 	}
-	caption, err := meta.Caption(meta.Info{Kind: "p", Path: it.CloudPath, Size: fi.Size(), Mt: mtime, Hash: hash, FP: fp})
+	caption, err := meta.Caption(meta.Info{Kind: "p", Path: it.CloudPath, Size: fi.Size(), Mt: mtime, Hash: hash, FP: fp, Dev: e.Device()})
 	if err != nil {
 		return outcome{state: store.StateSkipped, note: err.Error()}
 	}
@@ -678,14 +689,18 @@ type Status struct {
 	Reconcile Reconcile      `json:"reconcile"`
 	// CooldownUntil is set while Telegram's rate limit has paused uploads.
 	CooldownUntil int64 `json:"cooldownUntil,omitempty"`
+	// Blocked explains why the phone's settings are holding uploads back.
+	Blocked string `json:"blocked,omitempty"`
+	Device  string `json:"device"`
 }
 
 // Status returns current activity.
 func (e *Engine) Status() Status {
 	counts, _ := e.st.Counts()
+	blocked := e.Blocked()
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	s := Status{Counts: counts, Scanning: e.scanning, Reconcile: e.reconcile}
+	s := Status{Counts: counts, Scanning: e.scanning, Reconcile: e.reconcile, Blocked: blocked, Device: e.Device()}
 	if time.Now().Before(e.cooldown) {
 		s.CooldownUntil = e.cooldown.Unix()
 	}

@@ -6,18 +6,29 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"io"
 	"log"
 	"net"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/Sammy-77A/tgvault/internal/app"
+	"github.com/Sammy-77A/tgvault/internal/web"
 )
 
 // Version is set by the build.
 var Version = "0.2.0-dev"
+
+// Host is implemented by the Android app.
+type Host interface {
+	// ShowNotification shows a notification; tapping it opens tgvault.
+	ShowNotification(title, body string)
+	// FileChanged tells Android's media scanner that a file was created or deleted.
+	FileChanged(path string)
+}
 
 var (
 	mu      sync.Mutex
@@ -25,8 +36,9 @@ var (
 )
 
 // Start runs tgvault with its data in dataDir and returns the page's URL.
-// Calling it again while running returns the same URL.
-func Start(dataDir string) (string, error) {
+// storageRoot is the phone's shared storage. Calling Start again while
+// running returns the same URL.
+func Start(dataDir, storageRoot string, host Host) (string, error) {
 	mu.Lock()
 	defer mu.Unlock()
 	if running != nil {
@@ -36,6 +48,9 @@ func Start(dataDir string) (string, error) {
 		default:
 			return running.URL, nil
 		}
+	}
+	if host == nil {
+		return "", errors.New("no host")
 	}
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return "", err
@@ -50,13 +65,22 @@ func Start(dataDir string) (string, error) {
 		l.Close()
 		return "", err
 	}
-	a, err := app.Start(context.Background(), app.Options{DataDir: dataDir, Listener: l, Token: hex.EncodeToString(buf), Version: Version, Pairing: true})
+	a, err := app.Start(context.Background(), app.Options{
+		DataDir: dataDir, Listener: l, Token: hex.EncodeToString(buf), Version: Version,
+		Phone: &app.PhoneOptions{StorageRoot: storageRoot, FileChanged: host.FileChanged, Notify: host.ShowNotification},
+	})
 	if err != nil {
 		l.Close()
 		return "", err
 	}
 	running = a
 	return a.URL, nil
+}
+
+func current() *app.App {
+	mu.Lock()
+	defer mu.Unlock()
+	return running
 }
 
 // Stop shuts tgvault down and waits until it has saved its state.
@@ -69,6 +93,48 @@ func Stop() {
 		a.Stop()
 		<-a.Done()
 	}
+}
+
+// RunBackup scans and uploads until nothing is left to do, for at most
+// timeoutSeconds. It reports whether everything was done. Call Start first.
+func RunBackup(timeoutSeconds int) bool {
+	a := current()
+	if a == nil {
+		return false
+	}
+	return a.RunBackup(time.Duration(timeoutSeconds) * time.Second)
+}
+
+// SetConditions passes whether the phone is on an unmetered network (Wi-Fi)
+// and whether it's charging.
+func SetConditions(unmetered, charging bool) {
+	if a := current(); a != nil {
+		a.SetConditions(unmetered, charging)
+	}
+}
+
+// SetPermissions passes which Android permissions are granted, so the page
+// can ask for missing ones.
+func SetPermissions(storage, notifications, battery bool) {
+	if a := current(); a != nil {
+		a.SetPermissions(web.PhonePermissions{Storage: storage, Notifications: notifications, Battery: battery})
+	}
+}
+
+// WifiOnly reports whether backups should wait for Wi-Fi.
+func WifiOnly() bool {
+	if a := current(); a != nil {
+		return a.WifiOnly()
+	}
+	return true
+}
+
+// ChargingOnly reports whether backups should wait for charging.
+func ChargingOnly() bool {
+	if a := current(); a != nil {
+		return a.ChargingOnly()
+	}
+	return false
 }
 
 // LogPath is where tgvault writes its log, for the app's "Share log" button.

@@ -45,6 +45,9 @@ func New(st *store.Store, tg *tgclient.Client, url string) *Watcher {
 	return &Watcher{st: st, tg: tg, url: url, send: send, now: time.Now, missingSince: map[int64]time.Time{}}
 }
 
+// SetSender replaces how notifications are shown (the Android app shows its own).
+func (w *Watcher) SetSender(s Sender) { w.send = s }
+
 // Enabled reports whether notifications are on (the default).
 func Enabled(st *store.Store) bool { return st.Get(SettingKey) != "off" }
 

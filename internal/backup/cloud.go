@@ -145,7 +145,8 @@ type Entry struct {
 	Files    int    `json:"files,omitempty"`
 	Mtime    int64  `json:"mtime,omitempty"`
 	Versions int    `json:"versions,omitempty"`
-	Local    string `json:"local"` // "same", "changed", "cloud-only", "mixed"
+	Local    string `json:"local"`  // "same", "changed", "cloud-only", "other-device", "mixed"
+	Device   string `json:"device"` // which device backed it up
 	MsgID    int    `json:"msgId,omitempty"`
 	Uploaded int64  `json:"uploaded,omitempty"`
 }
@@ -178,12 +179,13 @@ func (e *Engine) List(prefix string) ([]Entry, error) {
 			}
 			rest = strings.TrimPrefix(v.CloudPath, prefix+"/")
 		}
-		local := localState(v, byPath)
+		local := localState(v, byPath, e.Device())
 		if i := strings.IndexByte(rest, '/'); i >= 0 {
 			name := rest[:i]
 			f := folders[name]
 			if f == nil {
-				f = &Entry{Name: name, Path: path.Join(prefix, name), Kind: "folder", Local: local}
+				f = &Entry{Name: name, Path: path.Join(prefix, name), Kind: "folder", Local: local,
+					Device: meta.DeviceOf(v.CloudPath)}
 				folders[name] = f
 			}
 			f.Files++
@@ -198,7 +200,8 @@ func (e *Engine) List(prefix string) ([]Entry, error) {
 			kind = "project"
 		}
 		out = append(out, Entry{Name: rest, Path: v.CloudPath, Kind: kind, Size: v.Size, Mtime: v.Mtime,
-			Versions: counts[v.CloudPath], Local: local, MsgID: v.MsgID, Uploaded: v.UploadedAt})
+			Versions: counts[v.CloudPath], Local: local, MsgID: v.MsgID, Uploaded: v.UploadedAt,
+			Device: meta.DeviceOf(v.CloudPath)})
 	}
 	for _, f := range folders {
 		out = append(out, *f)
@@ -212,7 +215,10 @@ func (e *Engine) List(prefix string) ([]Entry, error) {
 	return out, nil
 }
 
-func localState(v store.Version, items map[string]store.Item) string {
+func localState(v store.Version, items map[string]store.Item, device string) string {
+	if meta.DeviceOf(v.CloudPath) != device {
+		return "other-device"
+	}
 	it, ok := items[v.CloudPath]
 	if !ok || !it.LocalPresent {
 		return "cloud-only"
@@ -431,6 +437,7 @@ func (e *Engine) restoreFile(ctx context.Context, v store.Version, target string
 		os.Remove(tmp)
 		return "", err
 	}
+	e.fileChanged(target)
 	return note, nil
 }
 
@@ -468,6 +475,7 @@ func (e *Engine) restoreProject(ctx context.Context, v store.Version, targetDir 
 		if err := extractEntry(zf, target); err != nil {
 			return "", err
 		}
+		e.fileChanged(target)
 	}
 	note := ""
 	if renamed > 0 {
@@ -796,6 +804,7 @@ func (e *Engine) deleteLocal(c FreeCandidate, v store.Version, dirs *[]freedDir)
 			return "deleting failed: " + err.Error()
 		}
 	}
+	e.fileChanged(abs)
 	*dirs = append(*dirs, freedDir{dir: filepath.Dir(abs), root: filepath.Clean(root.Path)})
 	_ = e.st.MarkGone([]int64{it.ID})
 	return ""

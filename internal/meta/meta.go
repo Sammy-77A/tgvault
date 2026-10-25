@@ -29,6 +29,30 @@ type Info struct {
 	Mt   int64  `json:"m"`           // local modification time (unix seconds)
 	Hash string `json:"h"`           // sha256 of the uploaded bytes
 	FP   string `json:"t,omitempty"` // project fingerprint
+	Dev  string `json:"d,omitempty"` // device that uploaded it: "PC" or "Phone"
+}
+
+// Device names. The PC's backups keep their original paths ("Documents/…");
+// every other device's backups live under a folder named after it ("Phone/…").
+const (
+	DevicePC    = "PC"
+	DevicePhone = "Phone"
+)
+
+// DeviceOf returns which device a cloud path belongs to.
+func DeviceOf(cloudPath string) string {
+	if cloudPath == DevicePhone || strings.HasPrefix(cloudPath, DevicePhone+"/") {
+		return DevicePhone
+	}
+	return DevicePC
+}
+
+// DevicePrefix is the folder a device's backups go under ("" for the PC).
+func DevicePrefix(device string) string {
+	if device == DevicePC || device == "" {
+		return ""
+	}
+	return device
 }
 
 // Caption builds the caption shown in Telegram: a readable path, hashtags for
@@ -145,6 +169,16 @@ var alwaysSkipDirs = map[string]bool{
 	".tmp.driveupload":   true, // Google Drive
 	".tmp.drivedownload": true, // Google Drive
 	".dropbox.cache":     true,
+	// Android: generated thumbnails and WhatsApp's temporary statuses.
+	".thumbnails": true,
+	".Statuses":   true,
+}
+
+// SkipPath reports whether a folder, by its path inside a backup folder, is one
+// Android keeps private to other apps (and doesn't let tgvault read anyway).
+func SkipPath(rel string) bool {
+	return rel == "Android/data" || rel == "Android/obb" ||
+		strings.HasSuffix(rel, "/Android/data") || strings.HasSuffix(rel, "/Android/obb")
 }
 
 // SkipDir reports whether a folder should be skipped because its contents can
@@ -183,6 +217,9 @@ func SkipFile(name string) bool {
 	}
 	if strings.HasPrefix(name, "~$") || strings.HasPrefix(name, ".~lock.") {
 		return true // Office / LibreOffice lock files
+	}
+	if strings.HasPrefix(name, ".trashed-") || strings.HasPrefix(name, ".pending-") {
+		return true // Android: in the trash, or still being written (e.g. a video recording)
 	}
 	for _, ext := range []string{".tmp", ".temp", ".crdownload", ".part", ".partial", ".download", ".tgvault-tmp"} {
 		if strings.HasSuffix(lower, ext) {

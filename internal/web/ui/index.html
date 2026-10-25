@@ -101,7 +101,14 @@
     </nav>
 
     <div data-panel="overview">
+      <div class="card banner" id="phoneBanner" hidden></div>
       <div class="card summary" id="summary"></div>
+      <div class="card" id="suggestCard" hidden>
+        <h2>Choose what to back up</h2>
+        <p class="hint">These are the usual folders on a phone. Your phone's files go into the backup under <b>Phone</b>, apart from your PC's.</p>
+        <ul class="list" id="suggestList"></ul>
+        <button class="primary" id="suggestGo" type="button">Back up selected folders</button>
+      </div>
       <div id="tasks"></div>
       <div class="card" id="projectsCard" hidden>
         <h2>Is this a code project?</h2>
@@ -139,6 +146,21 @@
     <div data-panel="settings" hidden>
       <div class="card">
         <h2>Settings</h2>
+        <div class="phone-only">
+          <label class="toggle"><input type="checkbox" id="wifiOnly"> Back up only on Wi-Fi (saves mobile data)</label>
+          <label class="toggle"><input type="checkbox" id="chargingOnly"> Back up only while charging</label>
+          <div class="setting">
+            <div><b>Phone permissions</b><p class="hint" id="permText"></p></div>
+          </div>
+          <div class="setting">
+            <div><b>Problem report</b><p class="hint">Shares tgvault's log, for example to yourself on Telegram, so a problem can be looked into.</p></div>
+            <a class="btn" href="tgvault://share-log">Share log</a>
+          </div>
+          <div class="setting">
+            <div><b>Updates</b><p class="hint">tgvault checks once a day and notifies you when a new version is ready.</p></div>
+            <a class="btn" href="tgvault://check-update">Check now</a>
+          </div>
+        </div>
         <label class="toggle pc-only"><input type="checkbox" id="autostart"> Start tgvault when I sign in to Windows (runs in the background)</label>
         <div class="setting">
           <label class="toggle"><input type="checkbox" id="notify"> Notify me when something needs my attention</label>

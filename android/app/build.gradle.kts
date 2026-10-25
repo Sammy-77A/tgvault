@@ -44,9 +44,15 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+    lint {
+        // Don't let lint warnings block building the APK.
+        checkReleaseBuilds = false
+    }
 }
 
 dependencies {
     // The Go code, built by `gomobile bind` into app/libs.
     implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar"))))
+    implementation("androidx.core:core-ktx:1.15.0")
+    implementation("androidx.work:work-runtime-ktx:2.10.0")
 }

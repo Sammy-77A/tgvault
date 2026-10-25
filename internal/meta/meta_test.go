@@ -116,3 +116,40 @@ func TestProjectMarkers(t *testing.T) {
 		t.Fatal("plain folder detected as project")
 	}
 }
+
+func TestDevices(t *testing.T) {
+	cases := map[string]string{"Documents/a.txt": DevicePC, "Phone": DevicePhone, "Phone/Camera/x.jpg": DevicePhone, "Phones/x": DevicePC}
+	for p, want := range cases {
+		if got := DeviceOf(p); got != want {
+			t.Errorf("DeviceOf(%q) = %s, want %s", p, got, want)
+		}
+	}
+	if DevicePrefix(DevicePC) != "" || DevicePrefix(DevicePhone) != "Phone" {
+		t.Fatal("PC paths stay unprefixed; phone paths go under Phone/")
+	}
+	in := Info{Kind: "f", Path: "Phone/Camera/x.jpg", Size: 1, Mt: 1, Hash: "h", Dev: DevicePhone}
+	c, _ := Caption(in)
+	out, ok := Parse(c)
+	if !ok || out.Dev != DevicePhone {
+		t.Fatalf("device lost in caption round trip: %+v", out)
+	}
+}
+
+func TestAndroidSkips(t *testing.T) {
+	for _, n := range []string{".trashed-1700000000-IMG_1.jpg", ".pending-1700000000-VID_2.mp4"} {
+		if !SkipFile(n) {
+			t.Errorf("%s should be skipped", n)
+		}
+	}
+	for _, rel := range []string{"Android/data", "Android/obb", "x/Android/data"} {
+		if !SkipPath(rel) {
+			t.Errorf("%s should be skipped", rel)
+		}
+	}
+	if SkipPath("Android/media") {
+		t.Error("Android/media holds WhatsApp media and must be backed up")
+	}
+	if !SkipDir(".thumbnails", nil, func(string) bool { return false }) {
+		t.Error(".thumbnails should be skipped")
+	}
+}

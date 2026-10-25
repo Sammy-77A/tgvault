@@ -166,3 +166,23 @@ dl.pair { display: grid; grid-template-columns: auto 1fr; gap: .35rem 1rem; marg
 dl.pair dt { color: var(--muted); }
 dl.pair dd { margin: 0; font-weight: 700; font-size: 1.25rem; letter-spacing: .04em; word-break: break-all; }
 .phone .pc-only { display: none; }
+
+/* Phone */
+.phone-only { display: none; }
+.phone .phone-only { display: block; }
+.banner { border-color: var(--warn); }
+.banner p { margin: .25rem 0 .75rem; }
+.banner .actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+.phone #login:not([hidden]) { display: flex; flex-direction: column; }
+.phone #pairBox { order: -1; margin: 0 0 1.5rem; }
+.phone .list li { flex-wrap: wrap; }
+.phone .list li .actions { flex-basis: 100%; justify-content: flex-start; }
+.phone main { padding-bottom: 4.5rem; }
+.phone .tabs {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; margin: 0;
+  background: var(--card); border-top: 1px solid var(--line); border-bottom: 0;
+  justify-content: space-around; padding-bottom: env(safe-area-inset-bottom);
+}
+.phone .tabs button { flex: 1; padding: .9rem .25rem; }
+.folder-pick { max-height: 50vh; overflow-y: auto; }
+.phone .tabs button.active { border-bottom-color: transparent; box-shadow: inset 0 2px 0 var(--accent); }

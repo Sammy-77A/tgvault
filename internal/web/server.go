@@ -42,6 +42,7 @@ type Server struct {
 	mux     *http.ServeMux
 	notify  *notify.Watcher
 	pairing *pair.Listener // set on devices that can be logged in from the PC
+	phone   *Phone         // set when running on a phone
 }
 
 // SetPairing shows the "log in from your PC" details while logged out.
@@ -122,6 +123,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/login/password", s.loginPassword)
 	s.mux.HandleFunc("POST /api/logout", s.logout)
 	s.mux.HandleFunc("POST /api/pair-phone", s.pairPhone)
+	s.mux.HandleFunc("POST /api/phone-settings", s.phoneSettings)
+	s.mux.HandleFunc("GET /api/suggest-folders", s.suggestFolders)
+	s.mux.HandleFunc("GET /api/browse", s.browse)
+	s.mux.HandleFunc("POST /api/save", s.save)
 	s.mux.HandleFunc("POST /api/login/resend", s.loginResend)
 	s.mux.HandleFunc("POST /api/login/qr", s.loginQR)
 	s.mux.HandleFunc("POST /api/login/qr/cancel", s.loginQRCancel)
@@ -231,6 +236,7 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 		"autostart": autostartEnabled(),
 		"notify":    notify.Enabled(s.st),
 		"pairing":   s.pairingInfo(),
+		"phone":     s.phoneState(),
 	})
 }
 
@@ -374,38 +380,11 @@ func (s *Server) addRoot(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "bad request")
 		return
 	}
-	p := filepath.Clean(strings.Trim(strings.TrimSpace(body.Path), `"`))
-	if !filepath.IsAbs(p) {
-		fail(w, 400, "enter a full folder path, like C:\\Users\\you\\Documents")
-		return
-	}
-	fi, err := os.Stat(p)
-	if err != nil || !fi.IsDir() {
-		fail(w, 400, "that folder doesn't exist")
-		return
-	}
-	if filepath.Dir(p) == p {
-		fail(w, 400, "back up folders, not a whole drive")
-		return
-	}
-	roots, _ := s.st.Roots()
-	for _, rt := range roots {
-		if rel, err := filepath.Rel(rt.Path, p); err == nil && !strings.HasPrefix(rel, "..") {
-			fail(w, 400, "that folder is already backed up as part of "+rt.Path)
-			return
-		}
-		if rel, err := filepath.Rel(p, rt.Path); err == nil && !strings.HasPrefix(rel, "..") {
-			fail(w, 400, "that folder contains "+rt.Path+", which is already backed up; remove that one first")
-			return
-		}
-	}
-	label := filepath.Base(p)
-	rt, err := s.st.AddRoot(p, label)
+	rt, err := s.eng.AddRoot(body.Path)
 	if err != nil {
-		fail(w, 500, err.Error())
+		fail(w, 400, err.Error())
 		return
 	}
-	s.eng.RequestScan(rt.ID)
 	writeJSON(w, rt)
 }
 

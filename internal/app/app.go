@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Sammy-77A/tgvault/internal/backup"
+	"github.com/Sammy-77A/tgvault/internal/meta"
 	"github.com/Sammy-77A/tgvault/internal/notify"
 	"github.com/Sammy-77A/tgvault/internal/pair"
 	"github.com/Sammy-77A/tgvault/internal/store"
@@ -25,6 +26,14 @@ type Options struct {
 	Token    string       // protects the web page
 	Version  string
 	Pairing  bool // let a logged-in PC log this device in over the local network
+	Phone    *PhoneOptions
+}
+
+// PhoneOptions are set when tgvault runs inside the Android app.
+type PhoneOptions struct {
+	StorageRoot string                   // shared storage, e.g. /storage/emulated/0
+	FileChanged func(path string)        // tell Android's media scanner
+	Notify      func(title, body string) // show an Android notification
 }
 
 // App is a running tgvault.
@@ -32,6 +41,9 @@ type App struct {
 	URL    string // the web page, with its access token
 	cancel context.CancelFunc
 	done   chan struct{}
+	eng    *backup.Engine
+	st     *store.Store
+	phone  *web.Phone
 }
 
 // Start opens the database and starts the Telegram client, backup engine,
@@ -47,9 +59,20 @@ func Start(ctx context.Context, o Options) (*App, error) {
 
 	tg := tgclient.New(st, o.DataDir, o.Version)
 	eng := backup.New(st, tg, o.DataDir)
+	a.eng, a.st = eng, st
 	tg.OnAccountChange(eng.ForgetAccount)
 	nw := notify.New(st, tg, a.URL)
 	srv := web.New(st, tg, eng, nw, o.Token, addr, o.Version, cancel)
+	if p := o.Phone; p != nil {
+		a.phone = &web.Phone{StorageRoot: p.StorageRoot, FileChanged: p.FileChanged}
+		srv.SetPhone(a.phone)
+		eng.Configure(backup.Config{Device: meta.DevicePhone, NoProjects: true,
+			SkipDirs: []string{a.phone.DownloadDir()}, FileChanged: p.FileChanged})
+		if p.Notify != nil {
+			nw.SetSender(func(title, body, _ string) error { p.Notify(title, body); return nil })
+		}
+		o.Pairing = true
+	}
 	if o.Pairing {
 		pl := pair.NewListener(tg)
 		srv.SetPairing(pl)
@@ -77,6 +100,28 @@ func Start(ctx context.Context, o Options) (*App, error) {
 	}()
 	return a, nil
 }
+
+// RunBackup scans and uploads until nothing is left or timeout passes; it
+// reports whether everything was done. Used by the phone's background job.
+func (a *App) RunBackup(timeout time.Duration) bool { return a.eng.RunBackup(timeout, a.done) }
+
+// SetConditions passes the phone's network and charging state to the engine.
+func (a *App) SetConditions(unmetered, charging bool) {
+	a.eng.SetConditions(backup.Conditions{Unmetered: unmetered, Charging: charging})
+}
+
+// SetPermissions tells the page which Android permissions are granted.
+func (a *App) SetPermissions(p web.PhonePermissions) {
+	if a.phone != nil {
+		a.phone.SetPermissions(p)
+	}
+}
+
+// WifiOnly reports whether the phone should back up only on Wi-Fi (the default).
+func (a *App) WifiOnly() bool { return a.st.Get(backup.SettingWifiOnly) != "off" }
+
+// ChargingOnly reports whether the phone should back up only while charging.
+func (a *App) ChargingOnly() bool { return a.st.Get(backup.SettingChargingOnly) == "on" }
 
 // Stop shuts tgvault down.
 func (a *App) Stop() { a.cancel() }

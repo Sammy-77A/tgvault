@@ -146,6 +146,7 @@ let lastStep = "";
 let lastQR = "";
 const onPhone = /Android/i.test(navigator.userAgent);
 if (onPhone) document.documentElement.classList.add("phone");
+const here = onPhone ? "this phone" : "this PC";
 let lastServerError = "";
 function renderLogin(tg) {
   const steps = {
@@ -223,6 +224,53 @@ function loginForm(formId, url, field) {
 
 // ---------- overview ----------
 
+function renderPhoneBanner() {
+  const ph = state.phone;
+  const banner = $("phoneBanner");
+  if (!ph) { banner.hidden = true; return; }
+  const p = ph.permissions;
+  const asks = [];
+  if (!p.storage) asks.push(["tgvault needs access to your files to back them up and restore them.", "Allow access to files", "tgvault://perm/storage"]);
+  if (!p.battery) asks.push(["Android may stop backups in the background unless tgvault is allowed to run.", "Allow background backups", "tgvault://perm/battery"]);
+  if (!p.notifications) asks.push(["Allow notifications so tgvault can tell you when something needs you.", "Allow notifications", "tgvault://perm/notifications"]);
+  banner.hidden = !asks.length;
+  replace(banner, asks.length ? [
+    el("h2", {}, "A few permissions are needed"),
+    asks.map(([text]) => el("p", {}, text)),
+    el("div", { class: "actions" }, asks.map(([, label, href], i) => el("a", { class: i === 0 ? "btn primary" : "btn", href }, label))),
+  ] : []);
+}
+
+let suggestions = null;
+async function renderSuggestions() {
+  const card = $("suggestCard");
+  const show = onPhone && state.phone && state.phone.permissions.storage && !(state.roots || []).length;
+  if (!show) { card.hidden = true; suggestions = null; return; }
+  if (suggestions === null) {
+    suggestions = [];
+    try { suggestions = (await api("/api/suggest-folders")).folders || []; } catch { /* shown as empty */ }
+    replace($("suggestList"), suggestions.map((f) => el("li", {},
+      el("label", { class: "toggle grow" },
+        el("input", { type: "checkbox", value: f.path, checked: f.checked }),
+        el("div", {}, el("div", { class: "name" }, f.label), f.hint ? el("div", { class: "sub" }, f.hint) : null)))));
+  }
+  card.hidden = !suggestions.length;
+}
+
+async function addSuggested() {
+  const picked = [...$("suggestList").querySelectorAll("input:checked")].map((i) => i.value);
+  if (!picked.length) { toast("Tick at least one folder, or use Add folder below."); return; }
+  // Add parents first, so a folder inside another selected one is reported, not duplicated.
+  picked.sort((a, b) => a.length - b.length);
+  const problems = [];
+  for (const p of picked) {
+    try { await api("/api/roots", { path: p }); } catch (err) { problems.push(`${p.split("/").pop()}: ${err.message}`); }
+  }
+  toast(problems.length ? problems.join("; ") : "Folders added; scanning now.");
+  suggestions = null;
+  refresh();
+}
+
 function renderOverview() {
   const e = state.engine;
   const c = e.counts;
@@ -246,6 +294,9 @@ function renderOverview() {
   } else if (e.scanning) {
     icon = "🔎"; big = "Checking your folders for changes"; sub = "";
   }
+  if (e.blocked && waiting) {
+    icon = "📶"; big = e.blocked; sub = `${n(waiting)} item${waiting === 1 ? "" : "s"} will go up as soon as that changes. You can change this in Settings.`;
+  }
   if (failed && state.roots && state.roots.length) {
     sub += ` ${n(failed)} item${failed === 1 ? " needs" : "s need"} attention — see Activity.`;
   }
@@ -263,6 +314,9 @@ function renderOverview() {
       el("div", { class: "big" }, big),
       el("div", { class: "hint" }, sub, held ? ` ${held} project folder(s) need your decision below.` : ""),
       ups));
+
+  renderPhoneBanner();
+  renderSuggestions();
 
   // Tasks (restores, freeing space)
   replace($("tasks"), (e.tasks || []).map((t) => {
@@ -312,7 +366,46 @@ async function setProject(id, st) {
   } catch (err) { toast(err.message); }
 }
 
+// Folder picker for the phone, which has no system folder dialog tgvault can use.
+async function pickFolderOnPhone() {
+  let current = "";
+  const where = el("div", { class: "sub" });
+  const list = el("ul", { class: "list folder-pick" });
+  const vols = el("div", { class: "actions" });
+  async function go(p) {
+    try {
+      const r = await api(`/api/browse?path=${encodeURIComponent(p)}`);
+      current = r.path;
+      where.textContent = r.path;
+      replace(vols, (r.volumes || []).length > 1
+        ? r.volumes.map((v) => el("button", { type: "button", class: "small", onclick: () => go(v.path) }, v.label)) : []);
+      replace(list,
+        r.parent ? el("li", { class: "clickable", onclick: () => go(r.parent) }, el("span", { class: "icon" }, "⬆️"), el("div", { class: "grow name" }, "Up one folder")) : null,
+        (r.dirs || []).map((d) => el("li", { class: "clickable", onclick: () => go(`${r.path}/${d}`) }, el("span", { class: "icon" }, "📁"), el("div", { class: "grow name" }, d))));
+    } catch (err) { toast(err.message); }
+  }
+  await go("");
+  let picked = null;
+  await dialog({
+    title: "Choose a folder to back up",
+    body: el("div", {}, vols, where, list),
+    buttons: [{ label: "Cancel", value: null }, { label: "Back up this folder", value: "pick", primary: true }],
+    run: async () => { picked = current; },
+  });
+  return picked;
+}
+
 async function addFolder() {
+  if (onPhone) {
+    const p = await pickFolderOnPhone();
+    if (!p) return;
+    try {
+      await api("/api/roots", { path: p });
+      toast("Folder added; scanning now.");
+      refresh();
+    } catch (err) { toast(err.message); }
+    return;
+  }
   const input = el("input", { type: "text", placeholder: "C:\\Users\\you\\Documents", autocomplete: "off" });
   const body = el("div", {},
     el("p", { class: "hint" }, "Everything inside this folder (including subfolders) will be backed up and kept up to date."),
@@ -343,11 +436,30 @@ async function removeRoot(r) {
 // ---------- cloud files ----------
 
 const localLabels = {
-  same: ["On this PC", "ok"],
-  changed: ["Changed on PC", "info"],
+  same: [`On ${here}`, "ok"],
+  changed: [`Changed on ${here}`, "info"],
   "cloud-only": ["Cloud only", "warn"],
-  mixed: ["Partly on PC", "info"],
+  mixed: [`Partly on ${here}`, "info"],
 };
+
+function localLabel(e) {
+  if (e.local === "other-device") return [e.device === "Phone" ? "From your phone" : "From your PC", "info"];
+  return localLabels[e.local] || ["", ""];
+}
+
+// On the phone, "download" saves into the phone's Download/tgvault folder.
+async function saveToPhone(body) {
+  toast("Saving…");
+  try {
+    const r = await api("/api/save", body);
+    toast(`Saved to ${r.saved.replace(/^.*\/Download\//, "Download/")}`);
+  } catch (err) { toast(err.message); }
+}
+
+function downloadButton(label, href, saveBody) {
+  if (onPhone) return el("button", { class: "small", onclick: (ev) => { ev.stopPropagation(); saveToPhone(saveBody); } }, label);
+  return el("a", { class: "btn small", href, onclick: (ev) => ev.stopPropagation() }, label);
+}
 
 async function loadCloud() {
   let data;
@@ -364,26 +476,27 @@ async function loadCloud() {
   });
   replace($("crumbs"), crumbs);
   replace($("folderActions"), cloudPath ? [
-    el("button", { class: "small", onclick: () => restore(cloudPath, true) }, "Restore folder"),
-    el("a", { class: "btn small", href: `/api/download-zip?path=${encodeURIComponent(cloudPath)}` }, "Download ZIP"),
+    el("button", { class: "small", onclick: () => restore(cloudPath, true, otherDevice(cloudPath)) }, "Restore folder"),
+    downloadButton("Download ZIP", `/api/download-zip?path=${encodeURIComponent(cloudPath)}`, { path: cloudPath, zip: true }),
     el("button", { class: "small", onclick: () => freeSpace(cloudPath) }, "Free up space"),
-    el("button", { class: "small danger", onclick: () => removeFromBackup(cloudPath) }, "Remove from backup"),
+    el("button", { class: "small danger", onclick: () => removeFromBackup(cloudPath, otherDevice(cloudPath) ? deviceOf(cloudPath) : "") }, "Remove from backup"),
   ] : []);
 
   $("cloudEmpty").hidden = data.entries.length > 0;
   replace($("cloudList"), data.entries.map((e) => {
-    const [label, cls] = localLabels[e.local] || ["", ""];
+    const [label, cls] = localLabel(e);
     const isFolder = e.kind === "folder";
     const icon = isFolder ? "📁" : e.kind === "project" ? "📦" : "📄";
     const sub = isFolder
       ? `${e.files} item${e.files > 1 ? "s" : ""} · ${bytes(e.size)}`
       : `${bytes(e.size)} · backed up ${when(e.uploaded)}${e.versions > 1 ? ` · ${e.versions} versions` : ""}${e.kind === "project" ? " · project ZIP" : ""}`;
     const actions = isFolder ? [] : [
-      el("a", { class: "btn small", href: `/api/download?path=${encodeURIComponent(e.path)}`, onclick: (ev) => ev.stopPropagation() }, "Download"),
-      el("button", { class: "small", onclick: (ev) => { ev.stopPropagation(); restore(e.path, false); } }, "Restore"),
+      downloadButton("Download", `/api/download?path=${encodeURIComponent(e.path)}`, { path: e.path }),
+      el("button", { class: "small", onclick: (ev) => { ev.stopPropagation(); restore(e.path, false, e.local === "other-device"); } }, "Restore"),
       e.versions > 1 ? el("button", { class: "small", onclick: (ev) => { ev.stopPropagation(); showVersions(e); } }, "Versions") : null,
       e.local === "same" ? el("button", { class: "small", onclick: (ev) => { ev.stopPropagation(); freeSpace(e.path); } }, "Free up space") : null,
-      e.local === "cloud-only" ? el("button", { class: "small danger", onclick: (ev) => { ev.stopPropagation(); removeFromBackup(e.path); } }, "Remove from backup") : null,
+      e.local === "cloud-only" || e.local === "other-device"
+        ? el("button", { class: "small danger", onclick: (ev) => { ev.stopPropagation(); removeFromBackup(e.path, e.local === "other-device" ? e.device : ""); } }, "Remove from backup") : null,
     ];
     return el("li", { class: isFolder ? "clickable" : "", onclick: isFolder ? () => openCloud(e.path) : null },
       el("span", { class: "icon" }, icon),
@@ -394,21 +507,27 @@ async function loadCloud() {
   }));
 }
 
+function deviceOf(p) { return p === "Phone" || p.startsWith("Phone/") ? "Phone" : "PC"; }
+function otherDevice(p) { return p !== "" && deviceOf(p) !== state.engine.device; }
+
 function openCloud(p) {
   cloudPath = p;
   loadCloud();
 }
 
-async function restore(path, isFolder) {
-  const orig = el("input", { type: "radio", name: "dest", value: "orig", checked: true });
-  const other = el("input", { type: "radio", name: "dest", value: "other" });
-  const destInput = el("input", { type: "text", placeholder: "C:\\Users\\you\\Restored", autocomplete: "off" });
+async function restore(path, isFolder, fromOtherDevice) {
+  const orig = el("input", { type: "radio", name: "dest", value: "orig", checked: !fromOtherDevice, disabled: !!fromOtherDevice });
+  const other = el("input", { type: "radio", name: "dest", value: "other", checked: !!fromOtherDevice });
+  const destInput = el("input", { type: "text", placeholder: onPhone ? "/storage/emulated/0/Download/tgvault" : "C:\\Users\\you\\Restored", autocomplete: "off" });
+  if (onPhone && fromOtherDevice) destInput.value = state.phone.downloadDir;
   const body = el("div", {},
     el("p", {}, `Restore ${path}${isFolder ? " with all its subfolders" : ""}.`),
     el("label", { class: "choice" }, orig, el("div", {}, el("b", {}, "Original location"),
-      el("div", { class: "hint" }, "Files already there are never overwritten; a different existing file keeps its name and the restored copy gets “(restored)” added."))),
+      el("div", { class: "hint" }, fromOtherDevice
+        ? `These were backed up from your ${deviceOf(path) === "Phone" ? "phone" : "PC"}, so choose a folder on ${here}.`
+        : "Files already there are never overwritten; a different existing file keeps its name and the restored copy gets “(restored)” added."))),
     el("label", { class: "choice" }, other, el("div", { class: "grow" }, el("b", {}, "Another folder"), destInput,
-      el("button", { type: "button", class: "small", onclick: async () => {
+      onPhone ? null : el("button", { type: "button", class: "small", onclick: async () => {
         try {
           const r = await api("/api/pick-folder", {});
           if (r.path) { destInput.value = r.path; other.checked = true; }
@@ -433,15 +552,15 @@ async function freeSpace(path) {
   } catch (err) { toast(err.message); return; }
   const n = plan.candidates.length;
   const body = el("div", {},
-    n ? el("p", {}, `Delete ${n} item${n > 1 ? "s" : ""} (${bytes(plan.bytes)}) from this PC. Each one is checked against its Telegram copy first, and you can restore it any time from Cloud files.`)
+    n ? el("p", {}, `Delete ${n} item${n > 1 ? "s" : ""} (${bytes(plan.bytes)}) from ${here}. Each one is checked against its Telegram copy first, and you can restore it any time from Cloud files.`)
       : el("p", {}, "Nothing here can be removed yet, because nothing is fully backed up."),
     plan.candidates.some((c) => c.kind === "project")
       ? el("p", { class: "hint" }, "Project folders are deleted whole, including rebuildable folders like node_modules that were not backed up.") : null,
-    plan.kept && plan.kept.length ? el("div", {}, el("p", { class: "hint" }, "Kept on this PC:"),
+    plan.kept && plan.kept.length ? el("div", {}, el("p", { class: "hint" }, `Kept on ${here}:`),
       el("ul", { class: "scroll" }, plan.kept.slice(0, 200).map((k) => el("li", {}, k)))) : null);
   await dialog({
     title: "Free up space", body,
-    buttons: n ? [{ label: "Cancel", value: null }, { label: `Delete ${bytes(plan.bytes)} from this PC`, value: "go", danger: true }]
+    buttons: n ? [{ label: "Cancel", value: null }, { label: `Delete ${bytes(plan.bytes)} from ${here}`, value: "go", danger: true }]
       : [{ label: "Close", value: null }],
     run: async () => {
       await api("/api/free", { path });
@@ -451,12 +570,14 @@ async function freeSpace(path) {
   });
 }
 
-async function removeFromBackup(path) {
+async function removeFromBackup(path, fromDevice) {
+  const from = fromDevice === "Phone" ? "your phone" : "your PC";
   await dialog({
     title: "Remove from backup?",
     body: el("div", {},
       el("p", {}, `Permanently delete ${path} and all its versions from your Telegram backup channel.`),
-      el("p", { class: "hint" }, "This can't be undone. Files on this PC are not touched. It only works for things no longer being backed up from this PC.")),
+      fromDevice ? el("p", {}, `These were backed up from ${from}. If ${from} still has them, it will back them up again the next time it checks Telegram. To stop that, stop backing up the folder on ${from} first.`) : null,
+      el("p", { class: "hint" }, `This can't be undone. Files on ${here} are not touched. It only works for things no longer being backed up from ${here}.`)),
     buttons: [{ label: "Cancel", value: null }, { label: "Delete from Telegram", value: "go", danger: true }],
     run: async () => {
       await api("/api/delete-cloud", { path });
@@ -475,7 +596,7 @@ async function showVersions(entry) {
     el("div", { class: "grow" },
       el("div", { class: "name" }, i === 0 ? "Latest" : `Older version ${i}`),
       el("div", { class: "sub" }, `${bytes(v.size)} · backed up ${when(v.uploadedAt)}`)),
-    el("a", { class: "btn small", href: `/api/download?msg=${v.msgId}` }, "Download"))));
+    downloadButton("Download", `/api/download?msg=${v.msgId}`, { path: entry.path, msg: v.msgId }))));
   await dialog({ title: entry.name, body, buttons: [{ label: "Close", value: null }] });
 }
 
@@ -550,6 +671,13 @@ function renderSettings() {
     : rc.last ? `Last checked ${when(rc.last)}: ${rc.files} backed-up items found in Telegram.`
     : "Re-reads the backup channel to find files added or deleted there.";
   $("versionText").textContent = `tgvault ${state.version}`;
+  if (state.phone) {
+    $("wifiOnly").checked = state.phone.wifiOnly;
+    $("chargingOnly").checked = state.phone.chargingOnly;
+    const p = state.phone.permissions;
+    const yes = (b) => (b ? "allowed" : "not allowed");
+    $("permText").textContent = `Files: ${yes(p.storage)}. Background backups: ${yes(p.battery)}. Notifications: ${yes(p.notifications)}.`;
+  }
 }
 
 // ---------- wiring ----------
@@ -575,6 +703,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
   for (const b of document.querySelectorAll(".tabs button")) b.addEventListener("click", () => showTab(b.dataset.tab));
   $("addFolder").addEventListener("click", addFolder);
+  $("suggestGo").addEventListener("click", addSuggested);
+  for (const id of ["wifiOnly", "chargingOnly"]) {
+    $(id).addEventListener("change", (ev) => api("/api/phone-settings", { [id]: ev.target.checked })
+      .then(() => { toast("Saved."); refresh(); })
+      .catch((err) => { toast(err.message); refresh(); }));
+  }
   $("autostart").addEventListener("change", (ev) => api("/api/autostart", { on: ev.target.checked })
     .then(() => toast(ev.target.checked ? "tgvault will start when you sign in." : "Start-up turned off."))
     .catch((err) => { toast(err.message); refresh(); }));

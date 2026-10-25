@@ -70,4 +70,6 @@ jobs:
             gh release create android-test --prerelease --title "Android test build" \
               --notes "Latest test build of the tgvault Android app. Open this page on the phone and tap tgvault-test.apk to install or update."
           gh release upload android-test tgvault-test.apk --clobber
-          gh release edit android-test --notes "Latest test build of the tgvault Android app (build ${{ github.run_number }}, commit ${GITHUB_SHA::7}). Open this page on the phone and tap tgvault-test.apk to install or update."
+          gh release edit android-test --notes "Latest test build of the tgvault Android app (build ${{ github.run_number }}, commit ${GITHUB_SHA::7}). Open this page on the phone and tap tgvault-test.apk to install or update.
+
+          versionCode: ${{ github.run_number }}"

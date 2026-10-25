@@ -91,7 +91,10 @@ func (e *Engine) scanRoot(root store.Root) {
 		for i, d := range entries {
 			names[i] = d.Name()
 		}
-		markers := meta.ProjectMarkers(names)
+		var markers []string
+		if !e.cfg.NoProjects {
+			markers = meta.ProjectMarkers(names)
+		}
 		if len(markers) > 0 {
 			switch projects[rel] {
 			case store.ProjectConfirmed:
@@ -120,7 +123,7 @@ func (e *Engine) scanRoot(root store.Root) {
 				continue
 			}
 			if d.IsDir() {
-				if meta.SkipDir(name, ms, dirHasFile(childAbs)) {
+				if meta.SkipDir(name, ms, dirHasFile(childAbs)) || meta.SkipPath(childRel) || e.skipAbs(childAbs) {
 					continue
 				}
 				walk(childAbs, childRel)

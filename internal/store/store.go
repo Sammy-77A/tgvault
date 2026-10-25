@@ -469,6 +469,18 @@ func (s *Store) ClaimNext(quietFile, quietProject time.Duration) (Item, bool, er
 	return it, true, nil
 }
 
+// CountWaiting counts items still to upload now or soon: pending ones, and
+// failed ones whose retry time has come. Failures waiting for a later retry
+// aren't counted.
+func (s *Store) CountWaiting() (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM items
+		WHERE local_present=1 AND (state=? OR (state=? AND next_attempt<=?))
+		  AND root_id IN (SELECT id FROM roots WHERE paused=0)`,
+		StatePending, StateFailed, now()).Scan(&n)
+	return n, err
+}
+
 // FinishItem records the outcome of processing an item. If the item changed
 // again while it was uploading, it goes back to pending.
 func (s *Store) FinishItem(id int64, state, note string, attempts int, nextAttempt, startedAt int64) error {
