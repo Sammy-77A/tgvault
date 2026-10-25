@@ -167,7 +167,7 @@ func (c *Client) waitNeeded(ctx context.Context) bool {
 
 // idleWatch cancels the connection once it hasn't been needed for the grace period.
 func (c *Client) idleWatch(ctx context.Context, cancel context.CancelFunc) {
-	t := time.NewTicker(10 * time.Second)
+	t := time.NewTicker(5 * time.Second)
 	defer t.Stop()
 	lastNeeded := time.Now()
 	for {
@@ -176,7 +176,7 @@ func (c *Client) idleWatch(ctx context.Context, cancel context.CancelFunc) {
 			return
 		case <-t.C:
 		}
-		if c.needed() || c.Info().Status != StatusReady {
+		if c.needed() || c.Info().Status != StatusReady || !c.canIdle() {
 			lastNeeded = time.Now()
 		} else if time.Since(lastNeeded) >= c.idleAfter {
 			cancel()
@@ -298,7 +298,7 @@ func (c *Client) Run(ctx context.Context) {
 		}
 
 		runCtx, cancel := context.WithCancel(ctx)
-		if c.canIdle() {
+		if c.needed != nil {
 			go c.idleWatch(runCtx, cancel)
 		}
 		go func() {

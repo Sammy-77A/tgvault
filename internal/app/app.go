@@ -76,9 +76,10 @@ func Start(ctx context.Context, o Options) (*App, error) {
 		tg.SetDevice("Phone", "Android")
 		// Uploads in the background run in the backup job, which Android
 		// doesn't freeze; outside it, stay connected only for running tasks.
+		// The grace period is short because the phone freezes idle apps soon.
 		tg.DisconnectWhenIdle(func() bool {
 			return a.foreground.Load() || a.backups.Load() > 0 || eng.TasksRunning()
-		}, time.Minute)
+		}, 15*time.Second)
 		eng.Configure(backup.Config{Device: meta.DevicePhone, NoProjects: true,
 			SkipDirs: []string{a.phone.DownloadDir()}, FileChanged: p.FileChanged})
 		if p.Notify != nil {
