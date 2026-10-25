@@ -52,7 +52,7 @@ The Android app backs up the phone into the same Telegram backup. It runs the sa
 
 ### Building the APK
 
-GitHub Actions builds it (`.github/workflows/android.yml`): `gomobile bind` turns the `mobile` package into an Android library, then Gradle builds the app in `android/`. Each push to `main` updates the android-test pre-release. Release signing uses the repository secrets `ANDROID_KEYSTORE_B64`, `ANDROID_KEYSTORE_PASSWORD` and `ANDROID_KEY_ALIAS`; keep an offline copy of that key, or updates won't install over the existing app.
+GitHub Actions builds it (`.github/workflows/android.yml`) for 64-bit ARM phones (nearly all current phones; x86 Android emulators block a system call the SQLite library uses): `gomobile bind` turns the `mobile` package into an Android library, then Gradle builds the app in `android/`. Each push to `main` updates the android-test pre-release. Release signing uses the repository secrets `ANDROID_KEYSTORE_B64`, `ANDROID_KEYSTORE_PASSWORD` and `ANDROID_KEY_ALIAS`; keep an offline copy of that key, or updates won't install over the existing app.
 
 ## Limits (for now)
 
