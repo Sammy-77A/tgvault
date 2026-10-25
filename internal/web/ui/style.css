@@ -187,3 +187,5 @@ dl.pair dd { margin: 0; font-weight: 700; font-size: 1.25rem; letter-spacing: .0
 .phone .tabs button { flex: 1; padding: .9rem .25rem; }
 .folder-pick { max-height: 50vh; overflow-y: auto; }
 .phone .tabs button.active { border-bottom-color: transparent; box-shadow: inset 0 2px 0 var(--accent); }
+.grow { min-width: 0; }
+.uploads .sub, .list .sub, .list .name { overflow-wrap: anywhere; }

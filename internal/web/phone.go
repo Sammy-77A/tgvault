@@ -115,8 +115,8 @@ func (s *Server) suggestFolders(w http.ResponseWriter, r *http.Request) {
 		{Label: "Download", Path: "Download", Checked: true},
 		{Label: "Recordings", Path: "Recordings", Hint: "voice recordings", Checked: true},
 		{Label: "Music", Path: "Music", Checked: false},
-		{Label: "WhatsApp media", Path: "Android/media/com.whatsapp/WhatsApp/Media", Hint: "photos, videos, voice notes and documents from chats", Checked: true},
-		{Label: "WhatsApp Business media", Path: "Android/media/com.whatsapp.w4b/WhatsApp Business/Media", Checked: true},
+		{Label: "WhatsApp", Path: "Android/media/com.whatsapp/WhatsApp/Media", Hint: "photos, videos, voice notes and documents from chats", Checked: true},
+		{Label: "WhatsApp Business", Path: "Android/media/com.whatsapp.w4b/WhatsApp Business/Media", Checked: true},
 	}
 	roots, _ := s.st.Roots()
 	var out []suggestion

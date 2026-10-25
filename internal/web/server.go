@@ -375,12 +375,13 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 func (s *Server) addRoot(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Path string `json:"path"`
+		Name string `json:"name"` // optional; defaults to the folder's name
 	}
 	if err := readJSON(r, &body); err != nil {
 		fail(w, 400, "bad request")
 		return
 	}
-	rt, err := s.eng.AddRoot(body.Path)
+	rt, err := s.eng.AddRootAs(body.Path, body.Name)
 	if err != nil {
 		fail(w, 400, err.Error())
 		return

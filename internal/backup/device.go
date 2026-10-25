@@ -107,7 +107,11 @@ func (e *Engine) Idle() bool {
 
 // AddRoot starts backing up a folder. Its cloud path is the folder's name,
 // under the device's folder on devices other than the PC ("Phone/Camera").
-func (e *Engine) AddRoot(p string) (store.Root, error) {
+func (e *Engine) AddRoot(p string) (store.Root, error) { return e.AddRootAs(p, "") }
+
+// AddRootAs is AddRoot with a chosen name instead of the folder's own, for
+// folders whose name says little (WhatsApp's is "Media").
+func (e *Engine) AddRootAs(p, name string) (store.Root, error) {
 	p = filepath.Clean(strings.Trim(strings.TrimSpace(p), `"`))
 	if !filepath.IsAbs(p) {
 		return store.Root{}, errors.New("enter a full folder path, like C:\\Users\\you\\Documents")
@@ -133,7 +137,10 @@ func (e *Engine) AddRoot(p string) (store.Root, error) {
 		}
 		taken[rt.Label] = true
 	}
-	name := filepath.Base(p)
+	name = strings.TrimSpace(strings.ReplaceAll(name, "/", " "))
+	if name == "" {
+		name = filepath.Base(p)
+	}
 	prefix := meta.DevicePrefix(e.Device())
 	if prefix == "" && meta.DeviceOf(name) != meta.DevicePC {
 		return store.Root{}, fmt.Errorf("a folder named %q would mix with your phone's backups; rename it first", name)

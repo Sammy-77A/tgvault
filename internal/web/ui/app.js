@@ -250,20 +250,20 @@ async function renderSuggestions() {
     try { suggestions = (await api("/api/suggest-folders")).folders || []; } catch { /* shown as empty */ }
     replace($("suggestList"), suggestions.map((f) => el("li", {},
       el("label", { class: "toggle grow" },
-        el("input", { type: "checkbox", value: f.path, checked: f.checked }),
+        el("input", { type: "checkbox", value: f.path, "data-name": f.label, checked: f.checked }),
         el("div", {}, el("div", { class: "name" }, f.label), f.hint ? el("div", { class: "sub" }, f.hint) : null)))));
   }
   card.hidden = !suggestions.length;
 }
 
 async function addSuggested() {
-  const picked = [...$("suggestList").querySelectorAll("input:checked")].map((i) => i.value);
+  const picked = [...$("suggestList").querySelectorAll("input:checked")].map((i) => ({ path: i.value, name: i.dataset.name }));
   if (!picked.length) { toast("Tick at least one folder, or use Add folder below."); return; }
   // Add parents first, so a folder inside another selected one is reported, not duplicated.
-  picked.sort((a, b) => a.length - b.length);
+  picked.sort((a, b) => a.path.length - b.path.length);
   const problems = [];
-  for (const p of picked) {
-    try { await api("/api/roots", { path: p }); } catch (err) { problems.push(`${p.split("/").pop()}: ${err.message}`); }
+  for (const f of picked) {
+    try { await api("/api/roots", f); } catch (err) { problems.push(`${f.name}: ${err.message}`); }
   }
   toast(problems.length ? problems.join("; ") : "Folders added; scanning now.");
   suggestions = null;
