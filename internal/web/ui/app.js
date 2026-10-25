@@ -485,6 +485,8 @@ const cloud = {
   entries: [], total: 0, searching: false, stamp: "", loadedAt: 0,
   sort: "name", desc: false,
   selected: new Map(), // path -> entry
+  order: [],    // entries as shown, so ranges follow the list on screen
+  anchor: null, // path of the item ranges start from
 };
 
 function cloudFilters() {
@@ -546,7 +548,8 @@ function renderCloud() {
   $("cloudEmpty").textContent = cloud.searching ? "Nothing matches." : "Nothing here yet.";
   $("cloudDir").textContent = cloud.desc ? "↓" : "↑";
 
-  replace($("cloudList"), sortEntries(cloud.entries).map(cloudRow));
+  cloud.order = sortEntries(cloud.entries);
+  replace($("cloudList"), cloud.order.map(cloudRow));
   renderSelection();
 }
 
@@ -558,17 +561,29 @@ function cloudRow(e) {
   const sub = isFolder
     ? `${e.files} item${e.files > 1 ? "s" : ""} · ${bytes(e.size)}`
     : `${bytes(e.size)} · modified ${when(e.mtime)}${e.versions > 1 ? ` · ${e.versions} versions` : ""}${e.kind === "project" ? " · project ZIP" : ""}`;
+  let shift = false;
   const box = el("input", {
     type: "checkbox", class: "pick", "aria-label": `Select ${e.name}`, checked: cloud.selected.has(e.path),
-    onclick: (ev) => ev.stopPropagation(),
-    onchange: (ev) => { if (ev.target.checked) cloud.selected.set(e.path, e); else cloud.selected.delete(e.path); renderSelection(); },
+    onclick: (ev) => { ev.stopPropagation(); shift = ev.shiftKey; },
+    onchange: (ev) => {
+      if (shift) selectRange(e, true);
+      else if (ev.target.checked) { cloud.selected.set(e.path, e); cloud.anchor = e.path; renderSelection(); }
+      else { cloud.selected.delete(e.path); renderSelection(); }
+    },
   });
+  // Download and Restore act on the whole selection when this item is part of it.
+  const targets = () => (cloud.selected.has(e.path) && cloud.selected.size > 1 ? [...cloud.selected.values()] : [e]);
   const actions = isFolder ? [] : [
-    el("button", { class: "small", onclick: (ev) => { ev.stopPropagation(); bulkDownload([e]); } }, "Download"),
-    el("button", { class: "small", onclick: (ev) => { ev.stopPropagation(); restore([e]); } }, "Restore"),
+    el("button", { class: "small", "data-label": "Download", onclick: (ev) => { ev.stopPropagation(); bulkDownload(targets()); } }, "Download"),
+    el("button", { class: "small", "data-label": "Restore", onclick: (ev) => { ev.stopPropagation(); restore(targets()); } }, "Restore"),
     e.versions > 1 ? el("button", { class: "small", onclick: (ev) => { ev.stopPropagation(); showVersions(e); } }, "Versions") : null,
   ];
-  return el("li", { class: isFolder ? "clickable" : "", onclick: isFolder ? () => openCloud(e.path) : null },
+  return el("li", {
+    class: isFolder ? "clickable" : "", tabindex: "0", "data-path": e.path,
+    onmousedown: (ev) => { if (ev.shiftKey) ev.preventDefault(); }, // no text selection on Shift+Click
+    onclick: (ev) => rowClick(ev, e),
+    oncontextmenu: (ev) => rowMenu(ev, e),
+  },
     box,
     el("span", { class: "icon" }, icon),
     el("div", { class: "grow" },
@@ -581,12 +596,121 @@ function cloudRow(e) {
 function openCloud(p) {
   cloudPath = p;
   cloud.selected.clear();
+  cloud.anchor = null;
   loadCloud();
 }
 
 // ---- selection and bulk actions ----
 
+// Click: select only this item (folders open). Ctrl/Cmd+Click adds or removes
+// one item; Shift+Click selects from the anchor to this item.
+function rowClick(ev, e) {
+  if (ev.target.closest("button, input, a")) return;
+  if (ev.shiftKey) selectRange(e, ev.ctrlKey || ev.metaKey);
+  else if (ev.ctrlKey || ev.metaKey) toggleOne(e);
+  else if (e.kind === "folder") openCloud(e.path);
+  else selectOnly(e);
+}
+
+function selectOnly(e) {
+  cloud.selected.clear();
+  cloud.selected.set(e.path, e);
+  cloud.anchor = e.path;
+  renderSelection();
+}
+
+function toggleOne(e) {
+  if (cloud.selected.has(e.path)) cloud.selected.delete(e.path);
+  else { cloud.selected.set(e.path, e); cloud.anchor = e.path; }
+  renderSelection();
+}
+
+// selectRange selects every item from the anchor to e, inclusive, in the
+// order shown, whether or not those rows are on screen. With add, the range is
+// added to the selection; otherwise it replaces it. With nothing selected the
+// first item is the anchor.
+function selectRange(e, add, anchor = cloud.anchor) {
+  const list = cloud.order;
+  let from = cloud.selected.size ? list.findIndex((x) => x.path === anchor) : -1;
+  if (from < 0) from = 0;
+  const to = list.findIndex((x) => x.path === e.path);
+  if (to < 0 || !list.length) return;
+  cloud.anchor = list[from].path;
+  if (!add) cloud.selected.clear();
+  for (let i = Math.min(from, to); i <= Math.max(from, to); i++) cloud.selected.set(list[i].path, list[i]);
+  renderSelection();
+}
+
+// Arrow keys move between rows; Shift+Up/Down grows or shrinks the range
+// from the anchor; Space toggles the row; Enter opens a folder.
+function cloudKeys(ev) {
+  const li = ev.target.closest && ev.target.closest("li[data-path]");
+  if (!li || ev.target !== li) return;
+  const i = cloud.order.findIndex((x) => x.path === li.dataset.path);
+  const e = cloud.order[i];
+  if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+    const next = cloud.order[i + (ev.key === "ArrowDown" ? 1 : -1)];
+    if (!next) return;
+    ev.preventDefault();
+    if (ev.shiftKey) {
+      if (!cloud.selected.size || !cloud.order.some((x) => x.path === cloud.anchor)) {
+        cloud.selected.set(e.path, e);
+        cloud.anchor = e.path;
+      }
+      selectRange(next, false);
+    }
+    rowFor(next.path)?.focus();
+  } else if (ev.key === " ") {
+    ev.preventDefault();
+    toggleOne(e);
+  } else if (ev.key === "Enter" && e.kind === "folder") {
+    openCloud(e.path);
+  }
+}
+
+function rowFor(path) {
+  return [...$("cloudList").children].find((li) => li.dataset.path === path);
+}
+
+// Right-click menu: "Select up to here" and, on a selected item, "Deselect".
+function rowMenu(ev, e) {
+  ev.preventDefault();
+  closeMenu();
+  const items = [el("button", { type: "button", onclick: () => { closeMenu(); selectRange(e, true); } }, "Select up to here")];
+  if (cloud.selected.has(e.path)) {
+    items.push(el("button", { type: "button", onclick: () => { closeMenu(); toggleOne(e); } }, "Deselect"));
+  }
+  const menu = el("div", { class: "ctxmenu", id: "ctxmenu", role: "menu" }, items);
+  document.body.append(menu);
+  const r = menu.getBoundingClientRect();
+  menu.style.left = `${Math.max(4, Math.min(ev.clientX, innerWidth - r.width - 4))}px`;
+  menu.style.top = `${Math.max(4, Math.min(ev.clientY, innerHeight - r.height - 4))}px`;
+  items[0].focus();
+}
+
+function closeMenu() {
+  const m = $("ctxmenu");
+  if (m) { m.remove(); return true; }
+  return false;
+}
+
+// Marks selected rows and updates per-row buttons that act on the selection.
+function renderRows() {
+  const n = cloud.selected.size;
+  for (const li of $("cloudList").children) {
+    const on = cloud.selected.has(li.dataset.path);
+    li.classList.toggle("selected", on);
+    li.setAttribute("aria-selected", on ? "true" : "false");
+    const box = li.querySelector(".pick");
+    if (box) box.checked = on;
+    for (const b of li.querySelectorAll("button[data-label]")) {
+      b.textContent = on && n > 1 ? `${b.dataset.label} ${n.toLocaleString()}` : b.dataset.label;
+    }
+  }
+}
+
 function renderSelection() {
+  renderRows();
   const sel = [...cloud.selected.values()];
   const n = sel.length;
   const visible = cloud.entries.length;
@@ -1001,6 +1125,19 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   $("cloudRefresh").addEventListener("click", () => refreshCloud(true));
   $("selAll").addEventListener("change", (ev) => selectAll(ev.target.checked));
+  $("cloudList").addEventListener("keydown", cloudKeys);
+  document.addEventListener("click", (ev) => { if (!ev.target.closest("#ctxmenu")) closeMenu(); });
+  addEventListener("scroll", closeMenu, true);
+  addEventListener("blur", closeMenu);
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Escape" || $("dlg").open) return;
+    if (closeMenu()) return;
+    if ($("cloudList").closest("[data-panel]").hidden || !cloud.selected.size) return;
+    if (ev.target.matches && ev.target.matches("input:not([type=checkbox]), select, textarea")) return; // e.g. clearing the search box
+    cloud.selected.clear();
+    cloud.anchor = null;
+    renderSelection();
+  });
   // Free up space.
   for (const id of ["recSort", "recType", "recMin"]) $(id).addEventListener("change", () => { space.selected.clear(); loadSpace(); });
   $("recMore").addEventListener("click", () => { space.limit += 500; loadSpace(); });
