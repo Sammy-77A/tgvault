@@ -172,7 +172,8 @@ dl.pair dd { margin: 0; font-weight: 700; font-size: 1.25rem; letter-spacing: .0
 .phone .phone-only { display: block; }
 .banner { border-color: var(--warn); }
 .banner p { margin: .25rem 0 .75rem; }
-.banner .actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+.banner .ask { padding: .5rem 0; border-top: 1px solid var(--line); }
+.banner .ask:first-of-type { border-top: 0; }
 .phone #login:not([hidden]) { display: flex; flex-direction: column; }
 .phone #pairBox { order: -1; margin: 0 0 1.5rem; }
 .phone .list li { flex-wrap: wrap; }

@@ -234,11 +234,10 @@ function renderPhoneBanner() {
   if (!p.battery) asks.push(["Android may stop backups in the background unless tgvault is allowed to run.", "Allow background backups", "tgvault://perm/battery"]);
   if (!p.notifications) asks.push(["Allow notifications so tgvault can tell you when something needs you.", "Allow notifications", "tgvault://perm/notifications"]);
   banner.hidden = !asks.length;
-  replace(banner, asks.length ? [
-    el("h2", {}, "A few permissions are needed"),
-    asks.map(([text]) => el("p", {}, text)),
-    el("div", { class: "actions" }, asks.map(([, label, href], i) => el("a", { class: i === 0 ? "btn primary" : "btn", href }, label))),
-  ] : []);
+  replace(banner, asks.length ? el("h2", {}, asks.length > 1 ? "A few permissions are needed" : "One permission is needed") : null,
+    ...asks.map(([text, label, href], i) => el("div", { class: "ask" },
+      el("p", {}, text),
+      el("a", { class: i === 0 ? "btn primary" : "btn", href }, label))));
 }
 
 let suggestions = null;
