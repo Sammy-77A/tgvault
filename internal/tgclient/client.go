@@ -99,6 +99,8 @@ type Client struct {
 	authed    chan struct{}
 	restart   chan struct{}
 	onAccount func() // called when a different account logs in
+	loginNote string // why this device was logged out, shown on the login screen
+	device    telegram.DeviceConfig
 }
 
 // New creates a client. Call Run to connect.
@@ -111,6 +113,27 @@ func New(st *store.Store, dataDir, version string) *Client {
 		ready:   make(chan struct{}),
 		authed:  make(chan struct{}, 1),
 		restart: make(chan struct{}, 1),
+		device:  telegram.DeviceConfig{DeviceModel: "PC", SystemVersion: "Windows"},
+	}
+}
+
+// SetDevice sets how this device is named in Telegram's list of active sessions.
+// Call before Run.
+func (c *Client) SetDevice(model, system string) {
+	c.device.DeviceModel, c.device.SystemVersion = model, system
+}
+
+// Reconnect closes every connection to Telegram and opens new ones. The phone
+// calls it when it switches networks: Telegram ends a login whose key is used
+// from two addresses at once, which happens if old connections linger on Wi-Fi
+// while new ones go over mobile data.
+func (c *Client) Reconnect() {
+	c.mu.Lock()
+	st := c.status
+	c.mu.Unlock()
+	// Don't interrupt a login in progress.
+	if st == StatusReady || st == StatusConnecting {
+		c.kick()
 	}
 }
 
@@ -125,6 +148,9 @@ func (c *Client) Info() Info {
 	defer c.mu.Unlock()
 	in := Info{Status: c.status, Error: c.lastErr, Phone: c.phone, Account: c.account, Online: c.online,
 		CodeVia: c.codeVia, CodeNext: c.codeNext, QRURL: c.qrURL}
+	if in.Error == "" && (in.Status == StatusNeedPhone || in.Status == StatusQR) {
+		in.Error = c.loginNote
+	}
 	if c.status == StatusReady {
 		in.Channel = ChannelTitle
 	}
@@ -221,6 +247,17 @@ func (c *Client) Run(ctx context.Context) {
 		if restarted {
 			continue
 		}
+		if deadSession(err) {
+			// Retrying can't help: the key is gone, so start a fresh login.
+			log.Printf("telegram: login ended (%v); removing the session", err)
+			if rmErr := os.Remove(c.sessionPath()); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+				log.Printf("telegram: %v", rmErr)
+			}
+			c.mu.Lock()
+			c.loginNote = friendly(err)
+			c.mu.Unlock()
+			continue
+		}
 		msg := "lost connection to Telegram; reconnecting"
 		if err != nil {
 			msg = friendly(err)
@@ -259,8 +296,8 @@ func (c *Client) runOnce(ctx context.Context, id int, hash string) error {
 		UpdateHandler:  dispatcher,
 		SessionStorage: &session.FileStorage{Path: c.sessionPath()},
 		Device: telegram.DeviceConfig{
-			DeviceModel:    "PC",
-			SystemVersion:  "Windows",
+			DeviceModel:    c.device.DeviceModel,
+			SystemVersion:  c.device.SystemVersion,
 			AppVersion:     "tgvault " + c.version,
 			SystemLangCode: "en",
 			LangCode:       "en",
@@ -595,6 +632,9 @@ func (c *Client) SubmitPassword(ctx context.Context, password string) error {
 }
 
 func (c *Client) loggedIn() {
+	c.mu.Lock()
+	c.loginNote = ""
+	c.mu.Unlock()
 	c.setStatus(StatusConnecting, "")
 	select {
 	case c.authed <- struct{}{}:
@@ -715,13 +755,21 @@ func friendly(err error) string {
 		return "that code expired; go back and request a new one"
 	case tgerr.Is(err, "PHONE_NUMBER_BANNED"):
 		return "Telegram says this phone number is banned"
-	case tgerr.Is(err, "AUTH_KEY_UNREGISTERED", "SESSION_REVOKED", "USER_DEACTIVATED"):
+	case tgerr.Is(err, "AUTH_KEY_DUPLICATED"):
+		return "Telegram ended this device's login because it saw it connected from two networks at once (for example Wi-Fi and mobile data); log in again"
+	case tgerr.Is(err, "AUTH_KEY_UNREGISTERED", "SESSION_REVOKED", "SESSION_EXPIRED", "USER_DEACTIVATED"):
 		return "this login was ended from another device; log in again"
 	}
 	if d, ok := tgerr.AsFloodWait(err); ok {
 		return fmt.Sprintf("Telegram asked to wait %s before trying again", d.Round(time.Second))
 	}
 	return err.Error()
+}
+
+// deadSession reports whether Telegram has ended this login for good, so the
+// saved session is useless.
+func deadSession(err error) bool {
+	return err != nil && tgerr.Is(err, "AUTH_KEY_DUPLICATED", "AUTH_KEY_UNREGISTERED", "SESSION_REVOKED", "SESSION_EXPIRED")
 }
 
 // Friendly is exported for other packages.

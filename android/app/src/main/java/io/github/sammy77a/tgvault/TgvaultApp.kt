@@ -17,6 +17,17 @@ class TgvaultApp : Application() {
         Notifications.createChannels(this)
         val cm = getSystemService(ConnectivityManager::class.java)
         cm.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
+            private var current: Network? = null
+
+            override fun onAvailable(network: Network) {
+                // Moving to another network: reconnect so no old connection
+                // lingers on the previous one (Telegram ends a login used from
+                // two addresses at once).
+                if (current != null && current != network) Core.networkChanged()
+                current = network
+                Core.update(this@TgvaultApp)
+            }
+
             override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) = Core.update(this@TgvaultApp)
             override fun onLost(network: Network) = Core.update(this@TgvaultApp)
         })

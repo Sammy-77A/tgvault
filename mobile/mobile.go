@@ -117,6 +117,14 @@ func SetConditions(unmetered, charging bool) {
 	}
 }
 
+// NetworkChanged tells tgvault the phone switched to another network (for
+// example from Wi-Fi to mobile data), so it reconnects to Telegram over it.
+func NetworkChanged() {
+	if a := current(); a != nil {
+		a.NetworkChanged()
+	}
+}
+
 // SetPermissions passes which Android permissions are granted, so the page
 // can ask for missing ones.
 func SetPermissions(storage, notifications, battery bool) {

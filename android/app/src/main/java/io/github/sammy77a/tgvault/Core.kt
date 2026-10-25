@@ -43,6 +43,11 @@ object Core {
         Mobile.setConditions(isUnmetered(ctx), isCharging(ctx))
     }
 
+    /** Tells tgvault the phone switched networks, so it reconnects to Telegram. */
+    fun networkChanged() {
+        if (url != null) Mobile.networkChanged()
+    }
+
     fun hasStorage(ctx: Context): Boolean =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             Environment.isExternalStorageManager()

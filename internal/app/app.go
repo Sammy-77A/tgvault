@@ -44,6 +44,7 @@ type App struct {
 	done   chan struct{}
 	eng    *backup.Engine
 	st     *store.Store
+	tg     *tgclient.Client
 	phone  *web.Phone
 }
 
@@ -60,7 +61,7 @@ func Start(ctx context.Context, o Options) (*App, error) {
 
 	tg := tgclient.New(st, o.DataDir, o.Version)
 	eng := backup.New(st, tg, o.DataDir)
-	a.eng, a.st = eng, st
+	a.eng, a.st, a.tg = eng, st, tg
 	tg.OnAccountChange(eng.ForgetAccount)
 	nw := notify.New(st, tg, a.URL)
 	srv := web.New(st, tg, eng, nw, o.Token, addr, o.Version, cancel)
@@ -68,6 +69,7 @@ func Start(ctx context.Context, o Options) (*App, error) {
 		a.phone = &web.Phone{StorageRoot: p.StorageRoot, FileChanged: p.FileChanged,
 			ShareDir: filepath.Join(o.DataDir, "share"), Share: p.Share}
 		srv.SetPhone(a.phone)
+		tg.SetDevice("Phone", "Android")
 		eng.Configure(backup.Config{Device: meta.DevicePhone, NoProjects: true,
 			SkipDirs: []string{a.phone.DownloadDir()}, FileChanged: p.FileChanged})
 		if p.Notify != nil {
@@ -111,6 +113,9 @@ func (a *App) RunBackup(timeout time.Duration) bool { return a.eng.RunBackup(tim
 func (a *App) SetConditions(unmetered, charging bool) {
 	a.eng.SetConditions(backup.Conditions{Unmetered: unmetered, Charging: charging})
 }
+
+// NetworkChanged reconnects to Telegram over the phone's new network.
+func (a *App) NetworkChanged() { a.tg.Reconnect() }
 
 // SetPermissions tells the page which Android permissions are granted.
 func (a *App) SetPermissions(p web.PhonePermissions) {
