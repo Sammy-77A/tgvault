@@ -477,7 +477,7 @@ async function loadCloud() {
   replace($("folderActions"), cloudPath ? [
     el("button", { class: "small", onclick: () => restore(cloudPath, true, otherDevice(cloudPath)) }, "Restore folder"),
     downloadButton("Download ZIP", `/api/download-zip?path=${encodeURIComponent(cloudPath)}`, { path: cloudPath, zip: true }),
-    el("button", { class: "small", onclick: () => freeSpace(cloudPath) }, "Free up space"),
+    otherDevice(cloudPath) ? null : el("button", { class: "small", onclick: () => freeSpace(cloudPath) }, "Free up space"),
     el("button", { class: "small danger", onclick: () => removeFromBackup(cloudPath, otherDevice(cloudPath) ? deviceOf(cloudPath) : "") }, "Remove from backup"),
   ] : []);
 
@@ -733,7 +733,7 @@ document.addEventListener("DOMContentLoaded", () => {
     addr.focus();
   });
   $("testNotify").addEventListener("click", () => api("/api/notify/test", {})
-    .then(() => toast("Sent. Look at the bottom-right of your screen."))
+    .then(() => toast(onPhone ? "Sent. Check your notifications." : "Sent. Look at the bottom-right of your screen."))
     .catch((err) => toast(err.message)));
   $("reconcile").addEventListener("click", () => api("/api/reconcile", {}).then(() => { toast("Checking Telegram…"); refresh(); }));
   $("logout").addEventListener("click", () => dialog({
