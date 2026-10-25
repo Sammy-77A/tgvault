@@ -69,7 +69,7 @@ main { max-width: 960px; margin: 0 auto; padding: 0 1rem 3rem; }
 .error { color: var(--bad); background: var(--bad-soft); padding: .5rem .7rem; border-radius: 8px; }
 
 form label { display: block; margin: .6rem 0; font-weight: 600; font-size: .9rem; }
-input[type=text], input:not([type]), input[type=tel], input[type=password] {
+input[type=text], input:not([type]), input[type=tel], input[type=password], input[type=search], input[type=date], select {
   display: block; width: 100%; margin-top: .25rem; padding: .55rem .65rem;
   border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit;
 }
