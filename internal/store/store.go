@@ -689,6 +689,32 @@ func (s *Store) DeleteVersions(msgIDs []int) error {
 	return nil
 }
 
+// VersionStamp changes whenever versions are added or removed, so the page
+// knows when to reload the file list.
+func (s *Store) VersionStamp() string {
+	var n, max int64
+	_ = s.db.QueryRow(`SELECT COUNT(*), COALESCE(MAX(msg_id),0) FROM versions`).Scan(&n, &max)
+	return fmt.Sprintf("%d:%d", n, max)
+}
+
+// MoveVersion changes the cloud path of a stored version.
+func (s *Store) MoveVersion(msgID int, cloudPath string) error {
+	_, err := s.db.Exec(`UPDATE versions SET cloud_path=? WHERE msg_id=?`, cloudPath, msgID)
+	return err
+}
+
+// MaxVersionID is the newest stored message ID (0 if none).
+func (s *Store) MaxVersionID() int {
+	var max int
+	_ = s.db.QueryRow(`SELECT COALESCE(MAX(msg_id),0) FROM versions`).Scan(&max)
+	return max
+}
+
+// LocalBackedUp lists files on this device whose backup is up to date.
+func (s *Store) LocalBackedUp() ([]Item, error) {
+	return s.queryItems(`WHERE local_present=1 AND state=? AND kind=?`, StateSynced, KindFile)
+}
+
 // AllVersionIDs returns every stored message ID.
 func (s *Store) AllVersionIDs() (map[int]bool, error) {
 	rows, err := s.db.Query(`SELECT msg_id FROM versions`)

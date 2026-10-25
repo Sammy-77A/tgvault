@@ -13,6 +13,7 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -92,7 +93,9 @@ func (e *Engine) reconcileOnce(ctx context.Context) (int, error) {
 	}
 	seen := map[int]bool{}
 	paths := map[string]bool{}
+	newest := 0
 	err = e.tg.ScanChannel(ctx, func(rf tgclient.RemoteFile) error {
+		newest = max(newest, rf.MsgID)
 		in, ok := meta.Parse(rf.Caption)
 		if !ok {
 			return nil // not a tgvault upload
@@ -125,6 +128,9 @@ func (e *Engine) reconcileOnce(ctx context.Context) (int, error) {
 			return 0, err
 		}
 	}
+	if newest > 0 {
+		_ = e.st.Set(settingSyncSeen, strconv.Itoa(newest))
+	}
 	if err := e.st.RequeueMissing(); err != nil {
 		return 0, err
 	}
@@ -145,8 +151,9 @@ type Entry struct {
 	Files    int    `json:"files,omitempty"`
 	Mtime    int64  `json:"mtime,omitempty"`
 	Versions int    `json:"versions,omitempty"`
-	Local    string `json:"local"`  // "same", "changed", "cloud-only", "other-device", "mixed"
-	Device   string `json:"device"` // which device backed it up
+	Local    string `json:"local"`          // "same", "changed", "cloud-only", "other-device", "mixed"
+	Device   string `json:"device"`         // which device backed it up
+	Type     string `json:"type,omitempty"` // audio, video, image, document, archive, other
 	MsgID    int    `json:"msgId,omitempty"`
 	Uploaded int64  `json:"uploaded,omitempty"`
 }
@@ -201,7 +208,7 @@ func (e *Engine) List(prefix string) ([]Entry, error) {
 		}
 		out = append(out, Entry{Name: rest, Path: v.CloudPath, Kind: kind, Size: v.Size, Mtime: v.Mtime,
 			Versions: counts[v.CloudPath], Local: local, MsgID: v.MsgID, Uploaded: v.UploadedAt,
-			Device: meta.DeviceOf(v.CloudPath)})
+			Device: meta.DeviceOf(v.CloudPath), Type: meta.FileType(rest)})
 	}
 	for _, f := range folders {
 		out = append(out, *f)
@@ -319,41 +326,67 @@ func (e *Engine) rootFor(cloudPath string) (store.Root, string, bool) {
 // Existing files are never overwritten: if a different file is already there,
 // the restored copy is saved next to it with " (restored)" in its name.
 func (e *Engine) Restore(ctx context.Context, prefix, dest string) (int64, error) {
-	versions, err := e.st.LatestUnder(prefix)
-	if err != nil {
-		return 0, err
-	}
-	if len(versions) == 0 {
-		return 0, errors.New("nothing in the cloud at that path")
-	}
-	targets := make([]string, len(versions))
-	for i, v := range versions {
-		if dest == "" {
-			root, rel, ok := e.rootFor(v.CloudPath)
-			if !ok {
-				return 0, fmt.Errorf("%q is no longer a backup folder on this PC; choose a folder to restore into", strings.SplitN(v.CloudPath, "/", 2)[0])
+	return e.RestoreMany(ctx, []string{prefix}, dest, "Restoring", nil)
+}
+
+// RestoreMany restores several files or folders as one task. verb titles the
+// task ("Restoring", "Downloading"). done, if set, gets the files written once
+// the task ends.
+func (e *Engine) RestoreMany(ctx context.Context, prefixes []string, dest, verb string, done func(written []string)) (int64, error) {
+	var versions []store.Version
+	var targets []string
+	seen := map[int]bool{}
+	for _, prefix := range prefixes {
+		vs, err := e.st.LatestUnder(prefix)
+		if err != nil {
+			return 0, err
+		}
+		for _, v := range vs {
+			if seen[v.MsgID] {
+				continue // a file inside a selected folder that was also selected
 			}
-			targets[i] = filepath.Join(root.Path, filepath.FromSlash(rel))
-		} else {
-			rel := strings.TrimPrefix(v.CloudPath, path.Dir(prefix)+"/")
-			if path.Dir(prefix) == "." {
-				rel = v.CloudPath
+			seen[v.MsgID] = true
+			if dest == "" {
+				root, rel, ok := e.rootFor(v.CloudPath)
+				if !ok {
+					return 0, fmt.Errorf("%q isn't a backup folder on %s; choose a folder to restore into",
+						topFolder(v.CloudPath), e.deviceWord())
+				}
+				targets = append(targets, filepath.Join(root.Path, filepath.FromSlash(rel)))
+			} else {
+				rel := v.CloudPath
+				if parent := path.Dir(prefix); parent != "." {
+					rel = strings.TrimPrefix(v.CloudPath, parent+"/")
+				}
+				targets = append(targets, filepath.Join(dest, filepath.FromSlash(rel)))
 			}
-			targets[i] = filepath.Join(dest, filepath.FromSlash(rel))
+			versions = append(versions, v)
 		}
 	}
-	t := e.newTask("restore", "Restoring "+displayName(prefix))
+	if len(versions) == 0 {
+		return 0, errors.New("nothing in the backup there")
+	}
+	title := verb + " " + displayName(prefixes[0])
+	if len(prefixes) > 1 {
+		title = fmt.Sprintf("%s %d selected items", verb, len(prefixes))
+	}
+	t := e.newTask("restore", title)
 	t.update(func(t *Task) { t.Total = len(versions) })
 	go func() {
 		ctx := context.WithoutCancel(ctx)
+		var written []string
 		for i, v := range versions {
 			t.update(func(t *Task) { t.Current = v.CloudPath })
-			var note string
+			var note, final string
 			var err error
 			if v.Kind == store.KindProject {
 				note, err = e.restoreProject(ctx, v, targets[i])
+				final = targets[i]
 			} else {
-				note, err = e.restoreFile(ctx, v, targets[i])
+				note, final, err = e.restoreFile(ctx, v, targets[i])
+			}
+			if err == nil && final != "" {
+				written = append(written, final)
 			}
 			t.update(func(t *Task) {
 				t.Done++
@@ -365,10 +398,25 @@ func (e *Engine) Restore(ctx context.Context, prefix, dest string) (int64, error
 				}
 			})
 		}
+		if done != nil {
+			done(written)
+		}
+		if len(versions) > 0 && dest != "" {
+			t.update(func(t *Task) { t.Notes = append(t.Notes, "saved in "+dest) })
+		}
 		t.update(func(t *Task) { t.Finished, t.Current = true, "" })
 		e.RequestScan(0)
 	}()
 	return t.ID, nil
+}
+
+func topFolder(p string) string { return strings.SplitN(p, "/", 2)[0] }
+
+func (e *Engine) deviceWord() string {
+	if e.Device() == meta.DevicePhone {
+		return "this phone"
+	}
+	return "this PC"
 }
 
 func displayName(p string) string {
@@ -418,27 +466,26 @@ func (e *Engine) downloadVerified(ctx context.Context, v store.Version, dir stri
 	return f.Name(), nil
 }
 
-func (e *Engine) restoreFile(ctx context.Context, v store.Version, target string) (string, error) {
-	note := ""
+func (e *Engine) restoreFile(ctx context.Context, v store.Version, target string) (note, final string, err error) {
 	if _, err := os.Stat(target); err == nil {
 		if h, err := hashFile(target); err == nil && h == v.Hash {
-			return "", nil // already there
+			return "", target, nil // already there
 		}
 		target = restoredName(target)
 		note = "a different file already existed, so this was saved as " + filepath.Base(target)
 	}
 	tmp, err := e.downloadVerified(ctx, v, filepath.Dir(target))
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	mt := time.Unix(v.Mtime, 0)
 	_ = os.Chtimes(tmp, mt, mt)
 	if err := os.Rename(tmp, target); err != nil {
 		os.Remove(tmp)
-		return "", err
+		return "", "", err
 	}
 	e.fileChanged(target)
-	return note, nil
+	return note, target, nil
 }
 
 func (e *Engine) restoreProject(ctx context.Context, v store.Version, targetDir string) (string, error) {
@@ -546,17 +593,39 @@ func (e *Engine) DownloadTo(ctx context.Context, msgID int, w io.Writer) error {
 
 // WriteZip streams a cloud folder as a ZIP, with projects unpacked into their folders.
 func (e *Engine) WriteZip(ctx context.Context, prefix string, w io.Writer) error {
-	versions, err := e.st.LatestUnder(prefix)
-	if err != nil {
-		return err
+	return e.WriteZipMany(ctx, []string{prefix}, w)
+}
+
+// WriteZipMany streams several files or folders as one ZIP. Each keeps its
+// path from its own parent folder.
+func (e *Engine) WriteZipMany(ctx context.Context, prefixes []string, w io.Writer) error {
+	type entry struct {
+		v   store.Version
+		rel string
 	}
-	base := path.Dir(prefix)
-	zw := zip.NewWriter(w)
-	for _, v := range versions {
-		rel := v.CloudPath
-		if base != "." && base != "" {
-			rel = strings.TrimPrefix(v.CloudPath, base+"/")
+	var entries []entry
+	seen := map[int]bool{}
+	for _, prefix := range prefixes {
+		versions, err := e.st.LatestUnder(prefix)
+		if err != nil {
+			return err
 		}
+		base := path.Dir(prefix)
+		for _, v := range versions {
+			if seen[v.MsgID] {
+				continue
+			}
+			seen[v.MsgID] = true
+			rel := v.CloudPath
+			if base != "." && base != "" {
+				rel = strings.TrimPrefix(v.CloudPath, base+"/")
+			}
+			entries = append(entries, entry{v, rel})
+		}
+	}
+	zw := zip.NewWriter(w)
+	for _, en := range entries {
+		v, rel := en.v, en.rel
 		if v.Kind == store.KindProject {
 			if err := e.zipProject(ctx, zw, v, rel); err != nil {
 				return err
@@ -609,26 +678,72 @@ func (e *Engine) zipProject(ctx context.Context, zw *zip.Writer, v store.Version
 // prefix from Telegram. It refuses while any of those files are still being
 // backed up from this PC, because they would simply be uploaded again.
 func (e *Engine) DeleteFromCloud(ctx context.Context, prefix string) (int64, error) {
-	if prefix == "" {
-		return 0, errors.New("choose a folder or file to remove")
-	}
-	items, err := e.st.ItemsUnder(prefix)
-	if err != nil {
-		return 0, err
-	}
-	for _, it := range items {
-		if it.LocalPresent && it.State != store.StateSkipped {
-			return 0, fmt.Errorf("%s is still on this PC and being backed up; stop backing up its folder (or delete it locally) first", it.CloudPath)
+	return e.DeleteFromCloudMany(ctx, []string{prefix})
+}
+
+// checkNotBackedUpHere refuses paths still being backed up from this device:
+// removing or moving them in Telegram would just make them upload again.
+func (e *Engine) checkNotBackedUpHere(prefixes []string) error {
+	for _, prefix := range prefixes {
+		if prefix == "" {
+			return errors.New("choose a folder or file")
+		}
+		items, err := e.st.ItemsUnder(prefix)
+		if err != nil {
+			return err
+		}
+		for _, it := range items {
+			if it.LocalPresent && it.State != store.StateSkipped {
+				return fmt.Errorf("%s is still on %s and being backed up; stop backing up its folder (or delete it locally) first",
+					it.CloudPath, e.deviceWord())
+			}
 		}
 	}
-	versions, err := e.st.VersionsUnder(prefix)
+	return nil
+}
+
+// versionsUnderAll returns every version under any of the prefixes, once each.
+func (e *Engine) versionsUnderAll(prefixes []string) ([]store.Version, error) {
+	var out []store.Version
+	seen := map[int]bool{}
+	for _, prefix := range prefixes {
+		vs, err := e.st.VersionsUnder(prefix)
+		if err != nil {
+			return nil, err
+		}
+		for _, v := range vs {
+			if !seen[v.MsgID] {
+				seen[v.MsgID] = true
+				out = append(out, v)
+			}
+		}
+	}
+	return out, nil
+}
+
+func describe(prefixes []string) string {
+	if len(prefixes) == 1 {
+		return prefixes[0]
+	}
+	return fmt.Sprintf("%d selected items", len(prefixes))
+}
+
+// DeleteFromCloudMany is DeleteFromCloud for several paths at once.
+func (e *Engine) DeleteFromCloudMany(ctx context.Context, prefixes []string) (int64, error) {
+	if len(prefixes) == 0 {
+		return 0, errors.New("choose a folder or file to remove")
+	}
+	if err := e.checkNotBackedUpHere(prefixes); err != nil {
+		return 0, err
+	}
+	versions, err := e.versionsUnderAll(prefixes)
 	if err != nil {
 		return 0, err
 	}
 	if len(versions) == 0 {
 		return 0, errors.New("nothing stored there")
 	}
-	t := e.newTask("delete", "Removing "+prefix+" from the backup")
+	t := e.newTask("delete", "Removing "+describe(prefixes)+" from the backup")
 	t.update(func(t *Task) { t.Total = len(versions) })
 	go func() {
 		ctx := context.WithoutCancel(ctx)
@@ -653,7 +768,9 @@ func (e *Engine) DeleteFromCloud(ctx context.Context, prefix string) (int64, err
 			_ = e.st.DeleteVersions(ids)
 			t.update(func(t *Task) { t.Done += len(ids) })
 		}
-		_ = e.st.ForgetGoneUnder(prefix)
+		for _, prefix := range prefixes {
+			_ = e.st.ForgetGoneUnder(prefix)
+		}
 		t.update(func(t *Task) { t.Finished = true })
 	}()
 	return t.ID, nil
@@ -677,12 +794,25 @@ type FreePlan struct {
 }
 
 // PlanFree lists local copies under prefix that are safely in Telegram.
-func (e *Engine) PlanFree(prefix string) (FreePlan, error) {
-	items, err := e.st.ItemsUnder(prefix)
-	if err != nil {
-		return FreePlan{}, err
+func (e *Engine) PlanFree(prefix string) (FreePlan, error) { return e.PlanFreeMany([]string{prefix}) }
+
+// PlanFreeMany is PlanFree for several paths at once.
+func (e *Engine) PlanFreeMany(prefixes []string) (FreePlan, error) {
+	var items []store.Item
+	seen := map[int64]bool{}
+	for _, prefix := range prefixes {
+		its, err := e.st.ItemsUnder(prefix)
+		if err != nil {
+			return FreePlan{}, err
+		}
+		for _, it := range its {
+			if !seen[it.ID] {
+				seen[it.ID] = true
+				items = append(items, it)
+			}
+		}
 	}
-	var plan FreePlan
+	plan := FreePlan{Candidates: []FreeCandidate{}}
 	for _, it := range items {
 		if !it.LocalPresent {
 			continue
@@ -707,14 +837,23 @@ func (e *Engine) PlanFree(prefix string) (FreePlan, error) {
 // FreeSpace deletes local copies under prefix after re-checking each one
 // against Telegram. It runs as a task.
 func (e *Engine) FreeSpace(ctx context.Context, prefix string) (int64, error) {
-	plan, err := e.PlanFree(prefix)
+	return e.FreeSpaceMany(ctx, []string{prefix})
+}
+
+// FreeSpaceMany is FreeSpace for several paths at once.
+func (e *Engine) FreeSpaceMany(ctx context.Context, prefixes []string) (int64, error) {
+	plan, err := e.PlanFreeMany(prefixes)
 	if err != nil {
 		return 0, err
 	}
 	if len(plan.Candidates) == 0 {
 		return 0, errors.New("nothing here is safely backed up yet, so nothing can be removed")
 	}
-	t := e.newTask("free", "Freeing space in "+displayName(prefix))
+	title := "Freeing space in " + displayName(prefixes[0])
+	if len(prefixes) > 1 {
+		title = fmt.Sprintf("Freeing space: %d selected items", len(prefixes))
+	}
+	t := e.newTask("free", title)
 	t.update(func(t *Task) { t.Total = len(plan.Candidates); t.Notes = plan.Kept })
 	go func() {
 		ctx := context.WithoutCancel(ctx)

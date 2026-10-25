@@ -15,6 +15,7 @@ import android.webkit.WebViewClient
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.content.FileProvider
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import java.io.File
 import kotlin.concurrent.thread
 import mobile.Mobile
@@ -22,6 +23,7 @@ import mobile.Mobile
 /** Shows tgvault's page, served by the Go code running inside the app. */
 class MainActivity : Activity() {
     private lateinit var web: WebView
+    private lateinit var swipe: SwipeRefreshLayout
     private var started = false
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -43,7 +45,21 @@ class MainActivity : Activity() {
                 }
             }
         }
-        setContentView(web)
+        // Downloads are saved by tgvault itself into Download/tgvault; a plain
+        // browser download would silently do nothing in this view.
+        web.setDownloadListener { _, _, _, _, _ ->
+            Toast.makeText(this, "Use the Download button; files are saved to Download/tgvault", Toast.LENGTH_LONG).show()
+        }
+        // Pull down to check Telegram for files from your other devices.
+        swipe = SwipeRefreshLayout(this).apply {
+            addView(web)
+            setColorSchemeColors(0xFF2F6F5E.toInt())
+            setOnRefreshListener {
+                pageRefresh()
+                postDelayed({ isRefreshing = false }, 1500)
+            }
+        }
+        setContentView(swipe)
         thread(name = "tgvault-start") {
             try {
                 val url = Core.start(this)
@@ -68,11 +84,16 @@ class MainActivity : Activity() {
         super.onResume()
         // Permissions may have changed in Android's settings.
         if (started) {
+            pageRefresh() // files from another device may have arrived meanwhile
             thread {
                 Core.update(this)
                 BackupWorker.schedule(this) // picks up changed Wi-Fi/charging settings
             }
         }
+    }
+
+    private fun pageRefresh() {
+        if (started) web.evaluateJavascript("window.tgvaultRefresh && window.tgvaultRefresh()", null)
     }
 
     /** Links of the form tgvault://… come from the page and ask the app to do something. */

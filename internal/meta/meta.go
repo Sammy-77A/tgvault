@@ -256,3 +256,38 @@ func ProjectMarkers(entries []string) []string {
 	}
 	return found
 }
+
+// File types used to filter the file browser.
+const (
+	TypeAudio    = "audio"
+	TypeVideo    = "video"
+	TypeImage    = "image"
+	TypeDocument = "document"
+	TypeArchive  = "archive"
+	TypeOther    = "other"
+)
+
+var typeByExt = map[string]string{}
+
+func init() {
+	for t, exts := range map[string]string{
+		TypeAudio:    "mp3 m4a aac wav flac ogg opus oga wma amr 3ga aiff mid midi",
+		TypeVideo:    "mp4 mkv mov avi wmv webm m4v 3gp flv mpg mpeg ts",
+		TypeImage:    "jpg jpeg png gif webp heic heif bmp tif tiff svg raw dng cr2 nef ico",
+		TypeDocument: "pdf doc docx xls xlsx ppt pptx odt ods odp txt rtf md csv epub json xml html htm",
+		TypeArchive:  "zip rar 7z tar gz tgz bz2 xz apk exe msi iso dmg",
+	} {
+		for _, e := range strings.Fields(exts) {
+			typeByExt[e] = t
+		}
+	}
+}
+
+// FileType sorts a file name into audio, video, image, document, archive or other.
+func FileType(name string) string {
+	ext := strings.ToLower(strings.TrimPrefix(path.Ext(name), "."))
+	if t, ok := typeByExt[ext]; ok {
+		return t
+	}
+	return TypeOther
+}

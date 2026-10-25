@@ -112,6 +112,31 @@ async function refresh() {
     return;
   }
   render();
+  maybeReloadCloud();
+  reportFinishedTasks();
+}
+
+// Tell the user when a task (download, restore, …) ends, with any errors.
+const reportedTasks = new Set();
+let tasksSeeded = false;
+function reportFinishedTasks() {
+  for (const t of state.engine.tasks || []) {
+    if (!t.finished || reportedTasks.has(t.id)) continue;
+    reportedTasks.add(t.id);
+    if (!tasksSeeded) continue; // finished before this page opened
+    if ((t.errors || []).length) {
+      const list = t.errors.slice(0, 20);
+      dialog({
+        title: `${t.title}: ${t.errors.length} problem${t.errors.length > 1 ? "s" : ""}`,
+        body: el("div", {}, el("ul", { class: "scroll error" }, list.map((x) => el("li", {}, x))),
+          t.errors.length > list.length ? el("p", { class: "hint" }, `…and ${t.errors.length - list.length} more, listed at the top of the page.`) : null),
+        buttons: [{ label: "OK", value: null }],
+      });
+    } else {
+      toast(`${t.title} — done.${(t.notes || []).length ? " " + t.notes[t.notes.length - 1] : ""}`);
+    }
+  }
+  tasksSeeded = true;
 }
 
 function render() {
@@ -366,7 +391,7 @@ async function setProject(id, st) {
 }
 
 // Folder picker for the phone, which has no system folder dialog tgvault can use.
-async function pickFolderOnPhone() {
+async function pickFolderOnPhone(title = "Choose a folder to back up", button = "Back up this folder") {
   let current = "";
   const where = el("div", { class: "sub" });
   const list = el("ul", { class: "list folder-pick" });
@@ -386,9 +411,9 @@ async function pickFolderOnPhone() {
   await go("");
   let picked = null;
   await dialog({
-    title: "Choose a folder to back up",
+    title,
     body: el("div", {}, vols, where, list),
-    buttons: [{ label: "Cancel", value: null }, { label: "Back up this folder", value: "pick", primary: true }],
+    buttons: [{ label: "Cancel", value: null }, { label: button, value: "pick", primary: true }],
     run: async () => { picked = current; },
   });
   return picked;
@@ -446,26 +471,64 @@ function localLabel(e) {
   return localLabels[e.local] || ["", ""];
 }
 
-// On the phone, "download" saves into the phone's Download/tgvault folder.
-async function saveToPhone(body) {
-  toast("Saving…");
-  try {
-    const r = await api("/api/save", body);
-    toast(`Saved to ${r.saved.replace(/^.*\/Download\//, "Download/")}`);
-  } catch (err) { toast(err.message); }
+const typeIcons = { audio: "🎵", video: "🎬", image: "🖼️", document: "📄", archive: "🗜️", other: "📄" };
+
+function deviceOf(p) { return p === "Phone" || p.startsWith("Phone/") ? "Phone" : "PC"; }
+function otherDevice(p) { return p !== "" && deviceOf(p) !== state.engine.device; }
+
+function showError(message, title = "That didn't work") {
+  dialog({ title, body: el("p", {}, message), buttons: [{ label: "OK", value: null }] });
 }
 
-function downloadButton(label, href, saveBody) {
-  if (onPhone) return el("button", { class: "small", onclick: (ev) => { ev.stopPropagation(); saveToPhone(saveBody); } }, label);
-  return el("a", { class: "btn small", href, onclick: (ev) => ev.stopPropagation() }, label);
+// The browser state: current folder, filters, sort and selection.
+const cloud = {
+  entries: [], total: 0, searching: false, stamp: "", loadedAt: 0,
+  sort: "name", desc: false,
+  selected: new Map(), // path -> entry
+};
+
+function cloudFilters() {
+  return {
+    q: $("cloudSearch").value.trim(), type: $("cloudType").value,
+    from: $("cloudFrom").value, to: $("cloudTo").value,
+  };
 }
 
 async function loadCloud() {
+  const f = cloudFilters();
+  cloud.searching = !!(f.q || f.type || f.from || f.to);
   let data;
   try {
-    data = await api(`/api/cloud?path=${encodeURIComponent(cloudPath)}`);
+    if (cloud.searching) {
+      const qs = new URLSearchParams({ path: cloudPath, q: f.q, type: f.type, from: f.from, to: f.to, limit: "2000" });
+      data = await api(`/api/search?${qs}`);
+    } else {
+      data = await api(`/api/cloud?path=${encodeURIComponent(cloudPath)}`);
+    }
   } catch (err) { toast(err.message); return; }
+  cloud.entries = data.entries || [];
+  cloud.total = data.total || cloud.entries.length;
+  cloud.stamp = state ? state.cloudStamp : "";
+  cloud.loadedAt = Date.now();
+  renderCloud();
+}
 
+function sortEntries(list) {
+  const dir = cloud.desc ? -1 : 1;
+  const by = {
+    name: (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }),
+    mtime: (a, b) => (a.mtime || 0) - (b.mtime || 0),
+    size: (a, b) => a.size - b.size,
+    type: (a, b) => (a.type || "").localeCompare(b.type || "") || a.name.localeCompare(b.name),
+  }[cloud.sort];
+  return [...list].sort((a, b) => {
+    const fa = a.kind === "folder", fb = b.kind === "folder";
+    if (fa !== fb) return fa ? -1 : 1; // folders stay on top
+    return by(a, b) * dir;
+  });
+}
+
+function renderCloud() {
   const parts = cloudPath ? cloudPath.split("/") : [];
   const crumbs = [el("button", { onclick: () => openCloud("") }, "All backups")];
   parts.forEach((p, i) => {
@@ -474,85 +537,208 @@ async function loadCloud() {
     crumbs.push(el("button", { onclick: () => openCloud(target) }, p));
   });
   replace($("crumbs"), crumbs);
-  replace($("folderActions"), cloudPath ? [
-    el("button", { class: "small", onclick: () => restore(cloudPath, true, otherDevice(cloudPath)) }, "Restore folder"),
-    downloadButton("Download ZIP", `/api/download-zip?path=${encodeURIComponent(cloudPath)}`, { path: cloudPath, zip: true }),
-    otherDevice(cloudPath) ? null : el("button", { class: "small", onclick: () => freeSpace(cloudPath) }, "Free up space"),
-    el("button", { class: "small danger", onclick: () => removeFromBackup(cloudPath, otherDevice(cloudPath) ? deviceOf(cloudPath) : "") }, "Remove from backup"),
-  ] : []);
 
-  $("cloudEmpty").hidden = data.entries.length > 0;
-  replace($("cloudList"), data.entries.map((e) => {
-    const [label, cls] = localLabel(e);
-    const isFolder = e.kind === "folder";
-    const icon = isFolder ? "📁" : e.kind === "project" ? "📦" : "📄";
-    const sub = isFolder
-      ? `${e.files} item${e.files > 1 ? "s" : ""} · ${bytes(e.size)}`
-      : `${bytes(e.size)} · backed up ${when(e.uploaded)}${e.versions > 1 ? ` · ${e.versions} versions` : ""}${e.kind === "project" ? " · project ZIP" : ""}`;
-    const actions = isFolder ? [] : [
-      downloadButton("Download", `/api/download?path=${encodeURIComponent(e.path)}`, { path: e.path }),
-      el("button", { class: "small", onclick: (ev) => { ev.stopPropagation(); restore(e.path, false, e.local === "other-device"); } }, "Restore"),
-      e.versions > 1 ? el("button", { class: "small", onclick: (ev) => { ev.stopPropagation(); showVersions(e); } }, "Versions") : null,
-      e.local === "same" ? el("button", { class: "small", onclick: (ev) => { ev.stopPropagation(); freeSpace(e.path); } }, "Free up space") : null,
-      e.local === "cloud-only" || e.local === "other-device"
-        ? el("button", { class: "small danger", onclick: (ev) => { ev.stopPropagation(); removeFromBackup(e.path, e.local === "other-device" ? e.device : ""); } }, "Remove from backup") : null,
-    ];
-    return el("li", { class: isFolder ? "clickable" : "", onclick: isFolder ? () => openCloud(e.path) : null },
-      el("span", { class: "icon" }, icon),
-      el("div", { class: "grow" },
-        el("div", { class: "name" }, e.name),
-        el("div", { class: "sub" }, sub, " ", label ? el("span", { class: `pill ${cls}` }, label) : null)),
-      el("div", { class: "actions" }, actions));
-  }));
+  const where = cloudPath ? `in ${cloudPath} and its subfolders` : "everywhere";
+  $("cloudInfo").textContent = cloud.searching
+    ? `${cloud.total.toLocaleString()} match${cloud.total === 1 ? "" : "es"} ${where}${cloud.total > cloud.entries.length ? ` (showing the first ${cloud.entries.length.toLocaleString()})` : ""}`
+    : "";
+  $("cloudEmpty").hidden = cloud.entries.length > 0;
+  $("cloudEmpty").textContent = cloud.searching ? "Nothing matches." : "Nothing here yet.";
+  $("cloudDir").textContent = cloud.desc ? "↓" : "↑";
+
+  replace($("cloudList"), sortEntries(cloud.entries).map(cloudRow));
+  renderSelection();
 }
 
-function deviceOf(p) { return p === "Phone" || p.startsWith("Phone/") ? "Phone" : "PC"; }
-function otherDevice(p) { return p !== "" && deviceOf(p) !== state.engine.device; }
+function cloudRow(e) {
+  const [label, cls] = localLabel(e);
+  const isFolder = e.kind === "folder";
+  const icon = isFolder ? "📁" : e.kind === "project" ? "📦" : typeIcons[e.type] || "📄";
+  const folder = e.path.includes("/") ? e.path.slice(0, e.path.lastIndexOf("/")) : "";
+  const sub = isFolder
+    ? `${e.files} item${e.files > 1 ? "s" : ""} · ${bytes(e.size)}`
+    : `${bytes(e.size)} · modified ${when(e.mtime)}${e.versions > 1 ? ` · ${e.versions} versions` : ""}${e.kind === "project" ? " · project ZIP" : ""}`;
+  const box = el("input", {
+    type: "checkbox", class: "pick", "aria-label": `Select ${e.name}`, checked: cloud.selected.has(e.path),
+    onclick: (ev) => ev.stopPropagation(),
+    onchange: (ev) => { if (ev.target.checked) cloud.selected.set(e.path, e); else cloud.selected.delete(e.path); renderSelection(); },
+  });
+  const actions = isFolder ? [] : [
+    el("button", { class: "small", onclick: (ev) => { ev.stopPropagation(); bulkDownload([e]); } }, "Download"),
+    el("button", { class: "small", onclick: (ev) => { ev.stopPropagation(); restore([e]); } }, "Restore"),
+    e.versions > 1 ? el("button", { class: "small", onclick: (ev) => { ev.stopPropagation(); showVersions(e); } }, "Versions") : null,
+  ];
+  return el("li", { class: isFolder ? "clickable" : "", onclick: isFolder ? () => openCloud(e.path) : null },
+    box,
+    el("span", { class: "icon" }, icon),
+    el("div", { class: "grow" },
+      el("div", { class: "name" }, e.name),
+      cloud.searching && folder ? el("div", { class: "sub" }, `in ${folder}`) : null,
+      el("div", { class: "sub" }, sub, " ", label ? el("span", { class: `pill ${cls}` }, label) : null)),
+    el("div", { class: "actions" }, actions));
+}
 
 function openCloud(p) {
   cloudPath = p;
+  cloud.selected.clear();
   loadCloud();
 }
 
-async function restore(path, isFolder, fromOtherDevice) {
-  const orig = el("input", { type: "radio", name: "dest", value: "orig", checked: !fromOtherDevice, disabled: !!fromOtherDevice });
-  const other = el("input", { type: "radio", name: "dest", value: "other", checked: !!fromOtherDevice });
-  const destInput = el("input", { type: "text", placeholder: onPhone ? "/storage/emulated/0/Download/tgvault" : "C:\\Users\\you\\Restored", autocomplete: "off" });
-  if (onPhone && fromOtherDevice) destInput.value = state.phone.downloadDir;
-  const body = el("div", {},
-    el("p", {}, `Restore ${path}${isFolder ? " with all its subfolders" : ""}.`),
-    el("label", { class: "choice" }, orig, el("div", {}, el("b", {}, "Original location"),
-      el("div", { class: "hint" }, fromOtherDevice
-        ? `These were backed up from your ${deviceOf(path) === "Phone" ? "phone" : "PC"}, so choose a folder on ${here}.`
-        : "Files already there are never overwritten; a different existing file keeps its name and the restored copy gets “(restored)” added."))),
-    el("label", { class: "choice" }, other, el("div", { class: "grow" }, el("b", {}, "Another folder"), destInput,
-      onPhone ? null : el("button", { type: "button", class: "small", onclick: async () => {
-        try {
-          const r = await api("/api/pick-folder", {});
-          if (r.path) { destInput.value = r.path; other.checked = true; }
-        } catch (err) { toast(err.message); }
-      } }, "Browse…"))));
-  destInput.addEventListener("input", () => { other.checked = true; });
+// ---- selection and bulk actions ----
+
+function renderSelection() {
+  const sel = [...cloud.selected.values()];
+  const n = sel.length;
+  const visible = cloud.entries.length;
+  const all = $("selAll");
+  all.checked = visible > 0 && cloud.entries.every((e) => cloud.selected.has(e.path));
+  all.indeterminate = n > 0 && !all.checked;
+  $("selCount").textContent = n ? `${n.toLocaleString()} selected` : "Select all";
+  const anyHere = sel.some((e) => !otherDevice(e.path));
+  const anyLocal = sel.some((e) => e.local === "same" || e.local === "mixed" || e.kind === "folder");
+  replace($("selActions"), n ? [
+    el("button", { class: "small primary", onclick: () => bulkDownload(sel) }, "Download"),
+    el("button", { class: "small", onclick: () => restore(sel) }, "Restore"),
+    el("button", { class: "small", onclick: () => copyTo(sel) }, "Copy to…"),
+    el("button", { class: "small", onclick: () => moveInBackup(sel) }, "Move in backup…"),
+    onPhone ? el("button", { class: "small", onclick: () => shareFiles(sel) }, "Share")
+      : el("button", { class: "small", onclick: () => copyLinks(sel) }, "Copy Telegram links"),
+    anyHere && anyLocal ? el("button", { class: "small", onclick: () => freeSpace(sel.map((e) => e.path)) }, `Delete from ${here}`) : null,
+    el("button", { class: "small danger", onclick: () => removeFromBackup(sel) }, "Remove from backup"),
+    el("button", { class: "small link", onclick: () => { cloud.selected.clear(); renderCloud(); } }, "Clear"),
+  ] : []);
+  $("selActions").hidden = !n;
+}
+
+function selectAll(on) {
+  for (const e of cloud.entries) {
+    if (on) cloud.selected.set(e.path, e); else cloud.selected.delete(e.path);
+  }
+  renderCloud();
+}
+
+async function startBulk(action, entries, extra = {}) {
+  return api("/api/bulk", { action, paths: entries.map((e) => e.path), ...extra });
+}
+
+function names(entries) {
+  return entries.length === 1 ? entries[0].name : `${entries.length.toLocaleString()} items`;
+}
+
+async function bulkDownload(entries) {
+  if (onPhone) {
+    try {
+      await startBulk("download", entries);
+      toast(`Downloading ${names(entries)} to Download/tgvault. Progress is at the top of the page.`);
+      refresh();
+    } catch (err) { showError(err.message, "Couldn't download"); }
+    return;
+  }
+  if (entries.length === 1 && entries[0].kind !== "folder") {
+    location.href = `/api/download?path=${encodeURIComponent(entries[0].path)}`;
+    return;
+  }
+  // Several items: one ZIP, sent as a form so the browser saves it.
+  const form = el("form", { method: "POST", action: "/api/bulk-zip", hidden: true },
+    el("input", { type: "hidden", name: "paths", value: JSON.stringify(entries.map((e) => e.path)) }));
+  document.body.append(form);
+  form.submit();
+  form.remove();
+  toast("Preparing a ZIP; your browser will save it.");
+}
+
+async function restore(entries) {
+  const fromOther = entries.some((e) => otherDevice(e.path));
+  if (fromOther) return copyTo(entries, `These were backed up from your ${deviceOf(entries[0].path) === "Phone" ? "phone" : "PC"}, so choose a folder on ${here} to restore them into.`);
   await dialog({
-    title: "Restore", body,
-    buttons: [{ label: "Cancel", value: null }, { label: "Restore", value: "go", primary: true }],
-    run: async () => {
-      await api("/api/restore", { path, dest: other.checked ? destInput.value : "" });
-      toast("Restoring; progress is on the Overview tab.");
+    title: `Restore ${names(entries)}`,
+    body: el("div", {},
+      el("p", {}, "Put them back where they were on " + here + "."),
+      el("p", { class: "hint" }, "Files already there are never overwritten; a different existing file keeps its name and the restored copy gets “(restored)” added.")),
+    buttons: [{ label: "Cancel", value: null }, { label: "Copy somewhere else…", value: "other" }, { label: "Restore", value: "go", primary: true }],
+    run: async (v) => {
+      if (v === "other") { setTimeout(() => copyTo(entries), 0); return; }
+      await startBulk("restore", entries, { dest: "" });
+      toast("Restoring; progress is at the top of the page.");
       refresh();
     },
   });
 }
 
-async function freeSpace(path) {
+async function copyTo(entries, why) {
+  let dest = null;
+  if (onPhone) {
+    dest = await pickFolderOnPhone("Choose where to save them", "Save here");
+    if (!dest) return;
+  } else {
+    const input = el("input", { type: "text", placeholder: "C:\\Users\\you\\Restored", autocomplete: "off" });
+    const ok = await dialog({
+      title: `Copy ${names(entries)} to a folder`,
+      body: el("div", {},
+        why ? el("p", {}, why) : null,
+        el("label", {}, "Folder", input),
+        el("button", { type: "button", class: "small", onclick: async () => {
+          try { const r = await api("/api/pick-folder", {}); if (r.path) input.value = r.path; } catch (err) { toast(err.message); }
+        } }, "Browse…"),
+        el("p", { class: "hint" }, "Folders keep their structure. Nothing already there is overwritten.")),
+      buttons: [{ label: "Cancel", value: null }, { label: "Copy here", value: "go", primary: true }],
+      run: async () => { if (!input.value.trim()) throw new Error("Choose a folder first."); dest = input.value.trim(); },
+    });
+    if (!ok) return;
+  }
+  try {
+    await startBulk("restore", entries, { dest });
+    toast("Copying; progress is at the top of the page.");
+    refresh();
+  } catch (err) { showError(err.message, "Couldn't copy"); }
+}
+
+async function moveInBackup(entries) {
+  const folders = [...new Set((await api("/api/cloud?path=")).entries.filter((e) => e.kind === "folder").map((e) => e.path))];
+  const list = el("datalist", { id: "moveTargets" }, folders.map((f) => el("option", { value: f })));
+  const input = el("input", { type: "text", list: "moveTargets", placeholder: "Documents/Archive", autocomplete: "off", value: cloudPath });
+  await dialog({
+    title: `Move ${names(entries)} in the backup`,
+    body: el("div", {},
+      el("p", {}, "Changes where they're filed in your Telegram backup. Nothing is downloaded or deleted."),
+      el("label", {}, "Move to this backup folder", input, list),
+      el("p", { class: "hint" }, `Only for things no longer backed up from ${here}; otherwise they'd simply upload again at their old place. Files stay in their device's part of the backup (PC or Phone).`)),
+    buttons: [{ label: "Cancel", value: null }, { label: "Move", value: "go", primary: true }],
+    run: async () => {
+      await startBulk("move", entries, { to: input.value });
+      toast("Moving; progress is at the top of the page.");
+      cloud.selected.clear();
+      refresh();
+    },
+  });
+}
+
+async function shareFiles(entries) {
+  try {
+    await startBulk("share", entries);
+    toast("Getting the files ready to share…");
+  } catch (err) { showError(err.message, "Couldn't share"); }
+}
+
+async function copyLinks(entries) {
+  try {
+    const { links } = await startBulk("links", entries);
+    if (!links.length) throw new Error("Nothing to link to.");
+    await navigator.clipboard.writeText(links.join("\n"));
+    toast(`Copied ${links.length} Telegram link${links.length > 1 ? "s" : ""}. Paste them into any Telegram chat to share or forward the files.`);
+  } catch (err) { showError(err.message, "Couldn't copy the links"); }
+}
+
+async function freeSpace(paths) {
   let plan;
   try {
-    plan = await api(`/api/free-plan?path=${encodeURIComponent(path)}`);
-  } catch (err) { toast(err.message); return; }
+    plan = await api("/api/bulk", { action: "free-plan", paths });
+  } catch (err) { showError(err.message); return; }
   const n = plan.candidates.length;
   const body = el("div", {},
-    n ? el("p", {}, `Delete ${n} item${n > 1 ? "s" : ""} (${bytes(plan.bytes)}) from ${here}. Each one is checked against its Telegram copy first, and you can restore it any time from Cloud files.`)
-      : el("p", {}, "Nothing here can be removed yet, because nothing is fully backed up."),
+    n ? el("p", {}, `Delete ${n.toLocaleString()} file${n > 1 ? "s" : ""} (${bytes(plan.bytes)}) from ${here}.`)
+      : el("p", {}, "Nothing here can be deleted yet, because nothing is fully backed up."),
+    n ? el("p", { class: "hint" }, `Only the copy on ${here} is deleted. The backup in Telegram stays, and you can restore it any time from Cloud files. Each file is checked against its Telegram copy first.`) : null,
     plan.candidates.some((c) => c.kind === "project")
       ? el("p", { class: "hint" }, "Project folders are deleted whole, including rebuildable folders like node_modules that were not backed up.") : null,
     plan.kept && plan.kept.length ? el("div", {}, el("p", { class: "hint" }, `Kept on ${here}:`),
@@ -562,28 +748,29 @@ async function freeSpace(path) {
     buttons: n ? [{ label: "Cancel", value: null }, { label: `Delete ${bytes(plan.bytes)} from ${here}`, value: "go", danger: true }]
       : [{ label: "Close", value: null }],
     run: async () => {
-      await api("/api/free", { path });
-      toast("Freeing space; progress is on the Overview tab.");
+      await api("/api/bulk", { action: "free", paths: plan.candidates.map((c) => c.cloudPath) });
+      toast("Freeing space; progress is at the top of the page.");
+      cloud.selected.clear();
       refresh();
     },
   });
 }
 
-async function removeFromBackup(path, fromDevice) {
-  const from = fromDevice === "Phone" ? "your phone" : "your PC";
+async function removeFromBackup(entries) {
+  const others = entries.filter((e) => otherDevice(e.path));
+  const from = others.length && deviceOf(others[0].path) === "Phone" ? "your phone" : "your PC";
   await dialog({
     title: "Remove from backup?",
     body: el("div", {},
-      el("p", {}, `Permanently delete ${path} and all its versions from your Telegram backup channel.`),
-      fromDevice ? el("p", {}, `These were backed up from ${from}. If ${from} still has them, it will back them up again the next time it checks Telegram. To stop that, stop backing up the folder on ${from} first.`) : null,
+      el("p", {}, `Permanently delete ${names(entries)}, with every version, from your Telegram backup channel.`),
+      others.length ? el("p", {}, `Some were backed up from ${from}. If ${from} still has them, it will back them up again the next time it checks Telegram. To stop that, stop backing up the folder on ${from} first.`) : null,
       el("p", { class: "hint" }, `This can't be undone. Files on ${here} are not touched. It only works for things no longer being backed up from ${here}.`)),
     buttons: [{ label: "Cancel", value: null }, { label: "Delete from Telegram", value: "go", danger: true }],
     run: async () => {
-      await api("/api/delete-cloud", { path });
-      toast("Removing; progress is on the Overview tab.");
-      if (cloudPath === path) cloudPath = path.split("/").slice(0, -1).join("/");
+      await startBulk("delete-cloud", entries);
+      toast("Removing; progress is at the top of the page.");
+      cloud.selected.clear();
       refresh();
-      loadCloud();
     },
   });
 }
@@ -595,8 +782,104 @@ async function showVersions(entry) {
     el("div", { class: "grow" },
       el("div", { class: "name" }, i === 0 ? "Latest" : `Older version ${i}`),
       el("div", { class: "sub" }, `${bytes(v.size)} · backed up ${when(v.uploadedAt)}`)),
-    downloadButton("Download", `/api/download?msg=${v.msgId}`, { path: entry.path, msg: v.msgId }))));
+    onPhone ? null : el("a", { class: "btn small", href: `/api/download?msg=${v.msgId}` }, "Download"))));
   await dialog({ title: entry.name, body, buttons: [{ label: "Close", value: null }] });
+}
+
+// Reload the list when another device's files arrive (or anything changes),
+// without disturbing the selection.
+function maybeReloadCloud() {
+  if (tab !== "cloud" || !state || state.cloudStamp === cloud.stamp) return;
+  if (Date.now() - cloud.loadedAt < 10000) return;
+  loadCloud();
+}
+
+// Pull-to-refresh on the phone and the Refresh button: ask Telegram for new
+// files from other devices, then reload.
+async function refreshCloud(loud) {
+  if (state && state.telegram.status === "ready") {
+    try {
+      const r = await api("/api/sync", {});
+      if (r.added) toast(`${r.added} new file${r.added > 1 ? "s" : ""} from your other device.`);
+    } catch (err) { if (loud === true) toast(err.message); }
+  }
+  await refresh();
+  if (tab === "cloud") await loadCloud();
+  if (tab === "space") await loadSpace();
+}
+window.tgvaultRefresh = refreshCloud;
+
+// ---------- free up space ----------
+
+const space = { items: [], count: 0, bytes: 0, limit: 200, selected: new Map() };
+
+async function loadSpace(all = false) {
+  const qs = new URLSearchParams({ sort: $("recSort").value, type: $("recType").value, min: $("recMin").value, limit: all ? "0" : String(space.limit) });
+  let data;
+  try { data = await api(`/api/recommendations?${qs}`); } catch (err) { toast(err.message); return; }
+  space.items = data.items;
+  space.count = data.count;
+  space.bytes = data.bytes;
+  const known = new Set(space.items.map((r) => r.cloudPath));
+  for (const p of space.selected.keys()) if (!known.has(p) && !all) space.selected.delete(p);
+  renderSpace();
+}
+
+function renderSpace() {
+  $("spaceSummary").textContent = space.count
+    ? `${space.count.toLocaleString()} file${space.count > 1 ? "s" : ""} (${bytes(space.bytes)}) on ${here} are safely backed up and could be deleted here.`
+    : `Nothing to suggest right now: no file on ${here} matching these filters has an up-to-date backup yet.`;
+  replace($("recList"), space.items.map((r) => {
+    const name = r.cloudPath.slice(r.cloudPath.lastIndexOf("/") + 1);
+    const folder = r.cloudPath.slice(0, r.cloudPath.lastIndexOf("/"));
+    return el("li", {},
+      el("input", { type: "checkbox", class: "pick", "aria-label": `Select ${name}`, checked: space.selected.has(r.cloudPath),
+        onchange: (ev) => { if (ev.target.checked) space.selected.set(r.cloudPath, r); else space.selected.delete(r.cloudPath); renderSpaceSelection(); } }),
+      el("span", { class: "icon" }, typeIcons[r.type] || "📄"),
+      el("div", { class: "grow" },
+        el("div", { class: "name" }, name),
+        el("div", { class: "sub" }, `${bytes(r.size)} · modified ${when(r.mtime)} · in ${folder}`)));
+  }));
+  $("recMore").hidden = space.items.length >= space.count;
+  $("recMore").textContent = `Show more (${(space.count - space.items.length).toLocaleString()} left)`;
+  renderSpaceSelection();
+}
+
+function renderSpaceSelection() {
+  const sel = [...space.selected.values()];
+  const total = sel.reduce((s, r) => s + r.size, 0);
+  $("recAll").checked = space.count > 0 && sel.length === space.count;
+  $("recAll").indeterminate = sel.length > 0 && sel.length < space.count;
+  $("recCount").textContent = sel.length ? `${sel.length.toLocaleString()} selected · ${bytes(total)} would be freed` : "Select all";
+  $("recDelete").hidden = !sel.length;
+  $("recDelete").textContent = `Delete ${bytes(total)} from ${here}`;
+}
+
+async function selectAllSpace(on) {
+  if (!on) { space.selected.clear(); renderSpace(); return; }
+  if (space.items.length < space.count) await loadSpace(true); // "all" means every match, not just the loaded ones
+  for (const r of space.items) space.selected.set(r.cloudPath, r);
+  renderSpace();
+}
+
+async function deleteRecommended() {
+  const sel = [...space.selected.values()];
+  const total = sel.reduce((s, r) => s + r.size, 0);
+  await dialog({
+    title: `Delete ${sel.length.toLocaleString()} file${sel.length > 1 ? "s" : ""} from ${here}?`,
+    body: el("div", {},
+      el("p", {}, `This frees ${bytes(total)} on ${here}.`),
+      el("p", {}, el("b", {}, "Only the copy on " + here + " is deleted."), " The backup in Telegram stays intact, and you can restore any of these files from Cloud files whenever you like."),
+      el("p", { class: "hint" }, "Before deleting, tgvault checks each file still matches its backup and that the backup is still in Telegram. Anything that doesn't is kept.")),
+    buttons: [{ label: "Cancel", value: null }, { label: `Delete ${bytes(total)} from ${here}`, value: "go", danger: true }],
+    run: async () => {
+      await api("/api/bulk", { action: "free", paths: sel.map((r) => r.cloudPath) });
+      toast("Deleting; progress is at the top of the page.");
+      space.selected.clear();
+      refresh();
+      setTimeout(loadSpace, 3000);
+    },
+  });
 }
 
 // ---------- activity ----------
@@ -687,6 +970,7 @@ function showTab(name) {
   for (const p of document.querySelectorAll("[data-panel]")) p.hidden = p.dataset.panel !== name;
   if (name === "cloud") loadCloud();
   if (name === "activity") loadActivity();
+  if (name === "space") loadSpace();
 }
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -700,7 +984,28 @@ document.addEventListener("DOMContentLoaded", () => {
   $("cancelQR").addEventListener("click", () => loginAction("/api/login/qr/cancel"));
   $("resendCode").addEventListener("click", () => loginAction("/api/login/resend", "Asked Telegram to send the code again."));
 
-  for (const b of document.querySelectorAll(".tabs button")) b.addEventListener("click", () => showTab(b.dataset.tab));
+  for (const b of document.querySelectorAll(".tabs button")) {
+    b.addEventListener("click", () => showTab(b.dataset.tab));
+    if (onPhone && b.dataset.short) b.firstChild.textContent = b.dataset.short;
+  }
+  // File browser: search, filters, sort and selection.
+  let searchTimer;
+  $("cloudSearch").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(loadCloud, 300); });
+  for (const id of ["cloudType", "cloudFrom", "cloudTo"]) $(id).addEventListener("change", loadCloud);
+  $("cloudSort").addEventListener("change", (ev) => { cloud.sort = ev.target.value; renderCloud(); });
+  $("cloudDir").addEventListener("click", () => { cloud.desc = !cloud.desc; renderCloud(); });
+  $("cloudDates").addEventListener("click", () => { $("cloudDateRow").hidden = !$("cloudDateRow").hidden; });
+  $("cloudClear").addEventListener("click", () => {
+    for (const id of ["cloudSearch", "cloudType", "cloudFrom", "cloudTo"]) $(id).value = "";
+    loadCloud();
+  });
+  $("cloudRefresh").addEventListener("click", () => refreshCloud(true));
+  $("selAll").addEventListener("change", (ev) => selectAll(ev.target.checked));
+  // Free up space.
+  for (const id of ["recSort", "recType", "recMin"]) $(id).addEventListener("change", () => { space.selected.clear(); loadSpace(); });
+  $("recMore").addEventListener("click", () => { space.limit += 500; loadSpace(); });
+  $("recAll").addEventListener("change", (ev) => selectAllSpace(ev.target.checked));
+  $("recDelete").addEventListener("click", deleteRecommended);
   $("addFolder").addEventListener("click", addFolder);
   $("suggestGo").addEventListener("click", addSuggested);
   for (const id of ["wifiOnly", "chargingOnly"]) {

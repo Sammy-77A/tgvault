@@ -133,16 +133,14 @@ func (e *Engine) scanRoot(root store.Root) {
 				continue
 			}
 			fi, err := d.Info()
-			if err != nil {
-				continue // vanished while scanning
+			if err != nil || fi.Size() == 0 {
+				continue // vanished while scanning, or empty: nothing to back up
 			}
 			it := store.Item{Kind: store.KindFile, CloudPath: cloudPath(root.Label, childRel), RootID: root.ID,
 				Rel: childRel, Size: fi.Size(), Mtime: fi.ModTime().Unix()}
 			switch {
 			case fi.Size() > meta.MaxFileSize:
 				it.State, it.Note = store.StateSkipped, "over 2 GB; Telegram can't store files this big yet"
-			case fi.Size() == 0:
-				it.State, it.Note = store.StateSkipped, "empty file; nothing to back up"
 			}
 			upsert(it)
 		}

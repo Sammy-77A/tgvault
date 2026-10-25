@@ -94,11 +94,13 @@
   <!-- Main -->
   <section id="main" hidden>
     <nav class="tabs" role="tablist">
-      <button data-tab="overview" class="active">Overview</button>
-      <button data-tab="cloud">Cloud files</button>
-      <button data-tab="activity">Activity <span class="badge" id="activityBadge" hidden></span></button>
-      <button data-tab="settings">Settings</button>
+      <button data-tab="overview" data-short="Home" class="active">Overview</button>
+      <button data-tab="cloud" data-short="Files">Cloud files</button>
+      <button data-tab="space" data-short="Space">Free up space</button>
+      <button data-tab="activity" data-short="Activity">Activity <span class="badge" id="activityBadge" hidden></span></button>
+      <button data-tab="settings" data-short="Settings">Settings</button>
     </nav>
+    <div id="tasks"></div>
 
     <div data-panel="overview">
       <div class="card banner" id="phoneBanner" hidden></div>
@@ -109,7 +111,6 @@
         <ul class="list" id="suggestList"></ul>
         <button class="primary" id="suggestGo" type="button">Back up selected folders</button>
       </div>
-      <div id="tasks"></div>
       <div class="card" id="projectsCard" hidden>
         <h2>Is this a code project?</h2>
         <p class="hint">These folders look like code projects. A project is backed up as <b>one ZIP</b> (fast, tidy, keeps the last 3 versions). Rebuildable folders like <code>node_modules</code> and <code>vendor</code> are left out. Until you choose, tgvault leaves these folders alone.</p>
@@ -127,12 +128,75 @@
 
     <div data-panel="cloud" hidden>
       <div class="card">
-        <div class="row-head">
-          <nav class="crumbs" id="crumbs"></nav>
-          <div class="actions" id="folderActions"></div>
+        <nav class="crumbs" id="crumbs"></nav>
+        <div class="toolbar">
+          <input type="search" id="cloudSearch" placeholder="Search file names here and in subfolders" aria-label="Search file names">
+          <select id="cloudType" aria-label="File type">
+            <option value="">All types</option>
+            <option value="audio">Audio</option>
+            <option value="video">Videos</option>
+            <option value="image">Images</option>
+            <option value="document">Documents</option>
+            <option value="archive">Archives and apps</option>
+            <option value="other">Other</option>
+          </select>
+          <select id="cloudSort" aria-label="Sort by">
+            <option value="name">Sort: name</option>
+            <option value="mtime">Sort: date modified</option>
+            <option value="size">Sort: size</option>
+            <option value="type">Sort: type</option>
+          </select>
+          <button class="small" id="cloudDir" type="button" title="Reverse the order">↑</button>
+          <button class="small" id="cloudDates" type="button">Dates…</button>
+          <button class="small" id="cloudRefresh" type="button">Refresh</button>
         </div>
+        <div class="toolbar" id="cloudDateRow" hidden>
+          <label class="inline">Modified from <input type="date" id="cloudFrom"></label>
+          <label class="inline">to <input type="date" id="cloudTo"></label>
+          <button class="small link" id="cloudClear" type="button">Clear filters</button>
+        </div>
+        <div class="selbar">
+          <label class="inline"><input type="checkbox" id="selAll"> <span id="selCount">Select all</span></label>
+          <div class="actions" id="selActions" hidden></div>
+        </div>
+        <p class="hint" id="cloudInfo"></p>
         <ul class="list files" id="cloudList"></ul>
         <p class="hint" id="cloudEmpty" hidden>Nothing here yet.</p>
+      </div>
+    </div>
+
+    <div data-panel="space" hidden>
+      <div class="card">
+        <h2>Free up space</h2>
+        <p id="spaceSummary"></p>
+        <p class="hint">Only files whose backup in Telegram matches the file exactly are listed. Deleting removes just the copy on this device; the backup stays intact, and you can restore it from Cloud files at any time.</p>
+        <div class="toolbar">
+          <select id="recSort" aria-label="Order">
+            <option value="size">Largest first</option>
+            <option value="age">Oldest first</option>
+          </select>
+          <select id="recType" aria-label="File type">
+            <option value="">All types</option>
+            <option value="video">Videos</option>
+            <option value="image">Images</option>
+            <option value="audio">Audio</option>
+            <option value="document">Documents</option>
+            <option value="archive">Archives and apps</option>
+            <option value="other">Other</option>
+          </select>
+          <select id="recMin" aria-label="Minimum size">
+            <option value="0">Any size</option>
+            <option value="1048576">1 MB or more</option>
+            <option value="10485760">10 MB or more</option>
+            <option value="104857600">100 MB or more</option>
+          </select>
+        </div>
+        <div class="selbar">
+          <label class="inline"><input type="checkbox" id="recAll"> <span id="recCount">Select all</span></label>
+          <button class="danger" id="recDelete" type="button" hidden>Delete</button>
+        </div>
+        <ul class="list" id="recList"></ul>
+        <button id="recMore" type="button" hidden>Show more</button>
       </div>
     </div>
 

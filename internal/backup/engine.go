@@ -110,6 +110,7 @@ func (e *Engine) Run(ctx context.Context) error {
 	}
 	go e.scanLoop(ctx)
 	go e.reconcileLoop(ctx)
+	go e.syncLoop(ctx)
 	for i := 0; i < workers; i++ {
 		go e.workerLoop(ctx)
 	}
@@ -142,6 +143,7 @@ func (e *Engine) RequestScan(rootID int64) {
 
 // ForgetAccount is called when a different Telegram account logs in.
 func (e *Engine) ForgetAccount() {
+	_ = e.st.Delete(settingSyncSeen)
 	e.mu.Lock()
 	e.reconcile = Reconcile{}
 	e.mu.Unlock()

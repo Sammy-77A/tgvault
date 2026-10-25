@@ -54,7 +54,7 @@ func TestScanQueuesFilesKeepsFoldersAndHoldsProjects(t *testing.T) {
 	docs := filepath.Join(t.TempDir(), "Documents")
 	write(t, filepath.Join(docs, "a.txt"), "a")
 	write(t, filepath.Join(docs, "Taxes", "2025", "return.pdf"), "pdf")
-	write(t, filepath.Join(docs, "empty.txt"), "")
+	write(t, filepath.Join(docs, "empty.txt"), "") // empty files are left out entirely
 	write(t, filepath.Join(docs, "~$lock.docx"), "x")
 	write(t, filepath.Join(docs, "node_modules", "junk.js"), "x")
 	write(t, filepath.Join(docs, "shop", "package.json"), "{}")
@@ -70,7 +70,6 @@ func TestScanQueuesFilesKeepsFoldersAndHoldsProjects(t *testing.T) {
 	want := []string{
 		"Documents/Taxes/2025/return.pdf=pending",
 		"Documents/a.txt=pending",
-		"Documents/empty.txt=skipped",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("got %v\nwant %v", got, want)

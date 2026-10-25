@@ -13,6 +13,7 @@ import android.os.Build
 import android.os.Environment
 import android.os.PowerManager
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.FileProvider
 import java.io.File
 import mobile.Host
 import mobile.Mobile
@@ -73,5 +74,20 @@ class AndroidHost(private val ctx: Context) : Host {
     override fun fileChanged(path: String) {
         // Keeps the Gallery in step with restored and freed-up files.
         MediaScannerConnection.scanFile(ctx, arrayOf(path), null, null)
+    }
+
+    override fun shareFiles(paths: String) {
+        val uris = ArrayList(paths.split("\n").filter { it.isNotBlank() }.map {
+            FileProvider.getUriForFile(ctx, "${ctx.packageName}.files", File(it))
+        })
+        if (uris.isEmpty()) return
+        val send = if (uris.size == 1) {
+            Intent(Intent.ACTION_SEND).putExtra(Intent.EXTRA_STREAM, uris[0])
+        } else {
+            Intent(Intent.ACTION_SEND_MULTIPLE).putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
+        }
+        send.type = "*/*"
+        send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        ctx.startActivity(Intent.createChooser(send, "Share from tgvault").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 }

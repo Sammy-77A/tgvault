@@ -1,13 +1,9 @@
 package web
 
 import (
-	"errors"
 	"fmt"
-	"io"
-	"log"
 	"net/http"
 	"os"
-	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -15,13 +11,14 @@ import (
 	"sync"
 
 	"github.com/Sammy-77A/tgvault/internal/backup"
-	"github.com/Sammy-77A/tgvault/internal/store"
 )
 
 // Phone is what the Android app tells the page about the phone.
 type Phone struct {
 	StorageRoot string // the phone's shared storage, e.g. /storage/emulated/0
 	FileChanged func(path string)
+	ShareDir    string               // files are copied here before sharing
+	Share       func(paths []string) // opens Android's share sheet
 
 	mu    sync.Mutex
 	perms PhonePermissions
@@ -197,87 +194,6 @@ func (s *Server) volumes() []map[string]string {
 		}
 	}
 	return out
-}
-
-// save writes a cloud file (or a folder as ZIP) into the phone's Download folder.
-func (s *Server) save(w http.ResponseWriter, r *http.Request) {
-	if s.phone == nil {
-		fail(w, 400, "only on the phone")
-		return
-	}
-	var body struct {
-		Path string `json:"path"`
-		Msg  int    `json:"msg"`
-		Zip  bool   `json:"zip"`
-	}
-	if err := readJSON(r, &body); err != nil {
-		fail(w, 400, "bad request")
-		return
-	}
-	p, ok := cleanCloudPath(body.Path)
-	if !ok {
-		fail(w, 400, "bad path")
-		return
-	}
-	dir := s.phone.DownloadDir()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		fail(w, 500, err.Error())
-		return
-	}
-	var name string
-	var write func(io.Writer) error
-	if body.Zip {
-		name = path.Base(p) + ".zip"
-		if p == "" {
-			name = "tgvault.zip"
-		}
-		write = func(out io.Writer) error { return s.eng.WriteZip(r.Context(), p, out) }
-	} else {
-		var v store.Version
-		var err error
-		if body.Msg != 0 {
-			v, err = s.eng.Version(body.Msg)
-		} else {
-			var found bool
-			v, found, err = s.eng.LatestVersion(p)
-			if err == nil && !found {
-				err = errors.New("not found")
-			}
-		}
-		if err != nil {
-			fail(w, 404, "not in the backup")
-			return
-		}
-		name = path.Base(v.CloudPath)
-		if v.Kind == store.KindProject {
-			name += ".zip"
-		}
-		write = func(out io.Writer) error { return s.eng.DownloadTo(r.Context(), v.MsgID, out) }
-	}
-	target := freeName(filepath.Join(dir, name))
-	tmp := target + ".tgvault-tmp"
-	f, err := os.Create(tmp)
-	if err != nil {
-		fail(w, 500, err.Error())
-		return
-	}
-	err = write(f)
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	if err == nil {
-		err = os.Rename(tmp, target)
-	}
-	if err != nil {
-		os.Remove(tmp)
-		log.Printf("save %s: %v", p, err)
-		fail(w, 500, "saving failed: "+err.Error())
-		return
-	}
-	if s.phone.FileChanged != nil {
-		s.phone.FileChanged(target)
-	}
-	writeJSON(w, map[string]any{"ok": true, "saved": target})
 }
 
 // freeName returns p, or "name (2).ext" etc. if p exists.

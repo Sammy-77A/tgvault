@@ -126,7 +126,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/phone-settings", s.phoneSettings)
 	s.mux.HandleFunc("GET /api/suggest-folders", s.suggestFolders)
 	s.mux.HandleFunc("GET /api/browse", s.browse)
-	s.mux.HandleFunc("POST /api/save", s.save)
+	s.mux.HandleFunc("GET /api/search", s.search)
+	s.mux.HandleFunc("POST /api/sync", s.syncNow)
+	s.mux.HandleFunc("POST /api/bulk", s.bulk)
+	s.mux.HandleFunc("POST /api/bulk-zip", s.bulkZip)
+	s.mux.HandleFunc("GET /api/recommendations", s.recommendations)
 	s.mux.HandleFunc("POST /api/login/resend", s.loginResend)
 	s.mux.HandleFunc("POST /api/login/qr", s.loginQR)
 	s.mux.HandleFunc("POST /api/login/qr/cancel", s.loginQRCancel)
@@ -228,15 +232,16 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 			Path: filepath.Join(rt.Path, filepath.FromSlash(p.Rel))})
 	}
 	writeJSON(w, map[string]any{
-		"version":   s.version,
-		"telegram":  s.tg.Info(),
-		"engine":    s.eng.Status(),
-		"roots":     roots,
-		"projects":  projects,
-		"autostart": autostartEnabled(),
-		"notify":    notify.Enabled(s.st),
-		"pairing":   s.pairingInfo(),
-		"phone":     s.phoneState(),
+		"version":    s.version,
+		"telegram":   s.tg.Info(),
+		"engine":     s.eng.Status(),
+		"roots":      roots,
+		"projects":   projects,
+		"autostart":  autostartEnabled(),
+		"notify":     notify.Enabled(s.st),
+		"pairing":    s.pairingInfo(),
+		"phone":      s.phoneState(),
+		"cloudStamp": s.st.VersionStamp(),
 	})
 }
 

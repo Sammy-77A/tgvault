@@ -34,6 +34,7 @@ type PhoneOptions struct {
 	StorageRoot string                   // shared storage, e.g. /storage/emulated/0
 	FileChanged func(path string)        // tell Android's media scanner
 	Notify      func(title, body string) // show an Android notification
+	Share       func(paths []string)     // open Android's share sheet for files
 }
 
 // App is a running tgvault.
@@ -64,7 +65,8 @@ func Start(ctx context.Context, o Options) (*App, error) {
 	nw := notify.New(st, tg, a.URL)
 	srv := web.New(st, tg, eng, nw, o.Token, addr, o.Version, cancel)
 	if p := o.Phone; p != nil {
-		a.phone = &web.Phone{StorageRoot: p.StorageRoot, FileChanged: p.FileChanged}
+		a.phone = &web.Phone{StorageRoot: p.StorageRoot, FileChanged: p.FileChanged,
+			ShareDir: filepath.Join(o.DataDir, "share"), Share: p.Share}
 		srv.SetPhone(a.phone)
 		eng.Configure(backup.Config{Device: meta.DevicePhone, NoProjects: true,
 			SkipDirs: []string{a.phone.DownloadDir()}, FileChanged: p.FileChanged})

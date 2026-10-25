@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Files the app shares with other apps: the log, for "Share log". -->
+<!-- Files the app shares with other apps: the log ("Share log") and files
+     from the backup that you share (the Go side copies them to tgvault/share). -->
 <paths>
     <cache-path name="shared" path="shared/" />
+    <files-path name="share" path="tgvault/share/" />
 </paths>

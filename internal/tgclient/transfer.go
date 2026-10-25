@@ -401,3 +401,73 @@ func (c *Client) ScanChannel(ctx context.Context, fn func(RemoteFile) error) err
 		return nil
 	})
 }
+
+// ScanSince calls fn for every file in the channel newer than message minID,
+// newest first. It's a cheap way to notice what other devices uploaded.
+func (c *Client) ScanSince(ctx context.Context, minID int, fn func(RemoteFile) error) error {
+	api, ch, err := c.conn()
+	if err != nil {
+		return err
+	}
+	peer := &tg.InputPeerChannel{ChannelID: ch.ChannelID, AccessHash: ch.AccessHash}
+	offset := 0
+	for {
+		res, err := api.MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{
+			Peer: peer, OffsetID: offset, Limit: 100, MinID: minID,
+		})
+		if err != nil {
+			return err
+		}
+		var msgs []tg.MessageClass
+		switch r := res.(type) {
+		case *tg.MessagesChannelMessages:
+			msgs = r.Messages
+		case *tg.MessagesMessagesSlice:
+			msgs = r.Messages
+		case *tg.MessagesMessages:
+			msgs = r.Messages
+		}
+		if len(msgs) == 0 {
+			return nil
+		}
+		for _, m := range msgs {
+			if m.GetID() <= minID {
+				return nil
+			}
+			offset = m.GetID()
+			if rf, ok := remoteFile(m); ok {
+				if err := fn(rf); err != nil {
+					return err
+				}
+			}
+		}
+		if len(msgs) < 100 {
+			return nil
+		}
+	}
+}
+
+// EditCaption replaces a stored file's caption (used to move it in the backup).
+func (c *Client) EditCaption(ctx context.Context, msgID int, caption string) error {
+	api, ch, err := c.conn()
+	if err != nil {
+		return err
+	}
+	peer := &tg.InputPeerChannel{ChannelID: ch.ChannelID, AccessHash: ch.AccessHash}
+	_, err = api.MessagesEditMessage(ctx, &tg.MessagesEditMessageRequest{Peer: peer, ID: msgID, Message: caption})
+	if tgerr.Is(err, "MESSAGE_NOT_MODIFIED") {
+		return nil
+	}
+	return err
+}
+
+// MessageLink is a t.me link that opens a stored file in the Telegram app
+// (only for members of the private channel, which is just you).
+func (c *Client) MessageLink(msgID int) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.channel == nil {
+		return ""
+	}
+	return fmt.Sprintf("https://t.me/c/%d/%d", c.channel.ChannelID, msgID)
+}

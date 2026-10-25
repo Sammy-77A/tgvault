@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -28,6 +29,8 @@ type Host interface {
 	ShowNotification(title, body string)
 	// FileChanged tells Android's media scanner that a file was created or deleted.
 	FileChanged(path string)
+	// ShareFiles opens Android's share sheet for files, one path per line.
+	ShareFiles(paths string)
 }
 
 var (
@@ -67,7 +70,8 @@ func Start(dataDir, storageRoot string, host Host) (string, error) {
 	}
 	a, err := app.Start(context.Background(), app.Options{
 		DataDir: dataDir, Listener: l, Token: hex.EncodeToString(buf), Version: Version,
-		Phone: &app.PhoneOptions{StorageRoot: storageRoot, FileChanged: host.FileChanged, Notify: host.ShowNotification},
+		Phone: &app.PhoneOptions{StorageRoot: storageRoot, FileChanged: host.FileChanged, Notify: host.ShowNotification,
+			Share: func(paths []string) { host.ShareFiles(strings.Join(paths, "\n")) }},
 	})
 	if err != nil {
 		l.Close()
