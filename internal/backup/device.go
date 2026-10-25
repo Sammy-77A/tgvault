@@ -105,6 +105,19 @@ func (e *Engine) Idle() bool {
 	return err == nil && n == 0
 }
 
+// TasksRunning reports whether a restore, download or other task is running.
+func (e *Engine) TasksRunning() bool {
+	e.mu.Lock()
+	tasks := append([]*Task(nil), e.tasks...)
+	e.mu.Unlock()
+	for _, t := range tasks {
+		if !t.view().Finished {
+			return true
+		}
+	}
+	return false
+}
+
 // AddRoot starts backing up a folder. Its cloud path is the folder's name,
 // under the device's folder on devices other than the PC ("Phone/Camera").
 func (e *Engine) AddRoot(p string) (store.Root, error) { return e.AddRootAs(p, "") }

@@ -117,6 +117,14 @@ func SetConditions(unmetered, charging bool) {
 	}
 }
 
+// SetForeground tells tgvault whether the app is on screen. In the
+// background it disconnects from Telegram when there's nothing to do.
+func SetForeground(on bool) {
+	if a := current(); a != nil {
+		a.SetForeground(on)
+	}
+}
+
 // NetworkChanged tells tgvault the phone switched to another network (for
 // example from Wi-Fi to mobile data), so it reconnects to Telegram over it.
 func NetworkChanged() {

@@ -42,6 +42,7 @@ const (
 	StatusNeedPassword = "need_password"
 	StatusQR           = "need_qr"
 	StatusReady        = "ready"
+	StatusIdle         = "idle" // logged in, but disconnected until needed (phone)
 )
 
 // Setting keys.
@@ -101,6 +102,8 @@ type Client struct {
 	onAccount func() // called when a different account logs in
 	loginNote string // why this device was logged out, shown on the login screen
 	device    telegram.DeviceConfig
+	needed    func() bool // with idleAfter, whether to stay connected
+	idleAfter time.Duration
 }
 
 // New creates a client. Call Run to connect.
@@ -123,6 +126,65 @@ func (c *Client) SetDevice(model, system string) {
 	c.device.DeviceModel, c.device.SystemVersion = model, system
 }
 
+// DisconnectWhenIdle makes the client drop its connection once needed has
+// returned false for the grace period, and connect again as soon as it
+// returns true. The phone uses it: Android freezes apps in the background,
+// and a frozen app that still holds a connection can end up using its login
+// from two connections at once, which makes Telegram end the login for good
+// (AUTH_KEY_DUPLICATED). Call before Run.
+func (c *Client) DisconnectWhenIdle(needed func() bool, grace time.Duration) {
+	c.needed, c.idleAfter = needed, grace
+}
+
+// canIdle reports whether this device is logged in, so the connection can be
+// dropped and picked up again without a new login.
+func (c *Client) canIdle() bool {
+	if c.needed == nil || c.st.Get(keyAccountID) == "" {
+		return false
+	}
+	_, err := os.Stat(c.sessionPath())
+	return err == nil
+}
+
+// waitNeeded parks the client until the connection is needed again. It
+// reports false when ctx ends.
+func (c *Client) waitNeeded(ctx context.Context) bool {
+	c.setStatus(StatusIdle, "")
+	log.Printf("telegram: disconnected while idle")
+	t := time.NewTicker(2 * time.Second)
+	defer t.Stop()
+	for !c.needed() {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-c.restart:
+			return true
+		case <-t.C:
+		}
+	}
+	return true
+}
+
+// idleWatch cancels the connection once it hasn't been needed for the grace period.
+func (c *Client) idleWatch(ctx context.Context, cancel context.CancelFunc) {
+	t := time.NewTicker(10 * time.Second)
+	defer t.Stop()
+	lastNeeded := time.Now()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		if c.needed() || c.Info().Status != StatusReady {
+			lastNeeded = time.Now()
+		} else if time.Since(lastNeeded) >= c.idleAfter {
+			cancel()
+			return
+		}
+	}
+}
+
 // Reconnect closes every connection to Telegram and opens new ones. The phone
 // calls it when it switches networks: Telegram ends a login whose key is used
 // from two addresses at once, which happens if old connections linger on Wi-Fi
@@ -132,7 +194,7 @@ func (c *Client) Reconnect() {
 	st := c.status
 	c.mu.Unlock()
 	// Don't interrupt a login in progress.
-	if st == StatusReady || st == StatusConnecting {
+	if st == StatusReady || st == StatusConnecting || st == StatusIdle {
 		c.kick()
 	}
 }
@@ -229,7 +291,16 @@ func (c *Client) Run(ctx context.Context) {
 			}
 		}
 
+		if c.canIdle() && !c.needed() {
+			if !c.waitNeeded(ctx) {
+				return
+			}
+		}
+
 		runCtx, cancel := context.WithCancel(ctx)
+		if c.canIdle() {
+			go c.idleWatch(runCtx, cancel)
+		}
 		go func() {
 			select {
 			case <-c.restart:

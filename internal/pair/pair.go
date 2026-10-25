@@ -68,7 +68,7 @@ func (p *Listener) Run(ctx context.Context) {
 	defer t.Stop()
 	defer p.close()
 	for {
-		if p.tg.Info().Status == tgclient.StatusReady {
+		if st := p.tg.Info().Status; st == tgclient.StatusReady || st == tgclient.StatusIdle {
 			p.close()
 		} else if err := p.open(); err != nil {
 			log.Printf("pair: %v", err)

@@ -50,6 +50,11 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 func (s *Server) syncNow(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
+	// The phone may be reconnecting after being in the background.
+	if err := s.tg.WaitReady(ctx); err != nil {
+		fail(w, 502, "couldn't reach Telegram; check the internet connection")
+		return
+	}
 	n, err := s.eng.SyncNew(ctx)
 	if err != nil {
 		fail(w, 502, "couldn't check Telegram: "+err.Error())

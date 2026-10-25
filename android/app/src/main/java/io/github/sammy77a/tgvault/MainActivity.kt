@@ -82,6 +82,7 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        Core.setForeground(true)
         // Permissions may have changed in Android's settings.
         if (started) {
             pageRefresh() // files from another device may have arrived meanwhile
@@ -90,6 +91,11 @@ class MainActivity : Activity() {
                 BackupWorker.schedule(this) // picks up changed Wi-Fi/charging settings
             }
         }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        Core.setForeground(false)
     }
 
     private fun pageRefresh() {

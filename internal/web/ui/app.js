@@ -141,7 +141,10 @@ function reportFinishedTasks() {
 
 function render() {
   const tg = state.telegram;
-  const ready = tg.status === "ready";
+  // A logged-in phone disconnects while in the background; keep showing the
+  // app while it reconnects.
+  const resuming = (tg.status === "idle" || tg.status === "connecting") && !!tg.account;
+  const ready = tg.status === "ready" || resuming;
   $("login").hidden = ready;
   $("main").hidden = !ready;
 
@@ -151,7 +154,7 @@ function render() {
     $("connText").textContent = "Connected";
   } else if (ready) {
     conn.className = "conn warn";
-    $("connText").textContent = "Reconnecting…";
+    $("connText").textContent = resuming && !tg.error ? "Connecting…" : "Reconnecting…";
   } else {
     conn.className = "conn";
     $("connText").textContent = "Not logged in";

@@ -21,6 +21,7 @@ import mobile.Mobile
 /** Starts the Go side once per process and keeps it informed about the phone. */
 object Core {
     private var url: String? = null
+    @Volatile private var foreground = false
 
     fun dataDir(ctx: Context) = File(ctx.filesDir, "tgvault").absolutePath
 
@@ -32,6 +33,7 @@ object Core {
         val storage = Environment.getExternalStorageDirectory().absolutePath
         val u = Mobile.start(dataDir(app), storage, AndroidHost(app))
         url = u
+        Mobile.setForeground(foreground)
         update(app)
         return u
     }
@@ -41,6 +43,12 @@ object Core {
         if (url == null) return
         Mobile.setPermissions(hasStorage(ctx), hasNotifications(ctx), hasBattery(ctx))
         Mobile.setConditions(isUnmetered(ctx), isCharging(ctx))
+    }
+
+    /** Tells tgvault whether the app is on screen; in the background it disconnects when idle. */
+    fun setForeground(on: Boolean) {
+        foreground = on
+        if (url != null) Mobile.setForeground(on)
     }
 
     /** Tells tgvault the phone switched networks, so it reconnects to Telegram. */

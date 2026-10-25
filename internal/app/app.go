@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"github.com/Sammy-77A/tgvault/internal/backup"
@@ -46,6 +47,9 @@ type App struct {
 	st     *store.Store
 	tg     *tgclient.Client
 	phone  *web.Phone
+
+	foreground atomic.Bool  // the phone app is on screen
+	backups    atomic.Int32 // background backup jobs running
 }
 
 // Start opens the database and starts the Telegram client, backup engine,
@@ -70,6 +74,11 @@ func Start(ctx context.Context, o Options) (*App, error) {
 			ShareDir: filepath.Join(o.DataDir, "share"), Share: p.Share}
 		srv.SetPhone(a.phone)
 		tg.SetDevice("Phone", "Android")
+		// Uploads in the background run in the backup job, which Android
+		// doesn't freeze; outside it, stay connected only for running tasks.
+		tg.DisconnectWhenIdle(func() bool {
+			return a.foreground.Load() || a.backups.Load() > 0 || eng.TasksRunning()
+		}, time.Minute)
 		eng.Configure(backup.Config{Device: meta.DevicePhone, NoProjects: true,
 			SkipDirs: []string{a.phone.DownloadDir()}, FileChanged: p.FileChanged})
 		if p.Notify != nil {
@@ -107,7 +116,15 @@ func Start(ctx context.Context, o Options) (*App, error) {
 
 // RunBackup scans and uploads until nothing is left or timeout passes; it
 // reports whether everything was done. Used by the phone's background job.
-func (a *App) RunBackup(timeout time.Duration) bool { return a.eng.RunBackup(timeout, a.done) }
+func (a *App) RunBackup(timeout time.Duration) bool {
+	a.backups.Add(1)
+	defer a.backups.Add(-1)
+	return a.eng.RunBackup(timeout, a.done)
+}
+
+// SetForeground tells tgvault whether the phone app is on screen, so it stays
+// connected to Telegram while it is.
+func (a *App) SetForeground(on bool) { a.foreground.Store(on) }
 
 // SetConditions passes the phone's network and charging state to the engine.
 func (a *App) SetConditions(unmetered, charging bool) {
