@@ -31,14 +31,19 @@ import (
 // alone before its parts are removed.
 const orphanAge = 7 * 24 * time.Hour
 
-// envTestPartSize makes parts smaller (in bytes, whole 512 KiB pieces), for
-// testing splitting against the real channel without uploading gigabytes.
-// Unset in normal use.
-const envTestPartSize = "TGVAULT_TEST_PART_SIZE"
+// For testing splitting against the real channel without uploading
+// gigabytes: envTestPartSize makes parts smaller (in bytes, whole 512 KiB
+// pieces) for files under the cloud folder envTestPath only. Both are unset
+// in normal use.
+const (
+	envTestPartSize = "TGVAULT_TEST_PART_SIZE"
+	envTestPath     = "TGVAULT_TEST_SPLIT_PATH"
+)
 
-// splitLimits returns the size above which files are split, and the part size.
-func (e *Engine) splitLimits() (splitAt, partSize int64) {
-	if n, err := strconv.ParseInt(os.Getenv(envTestPartSize), 10, 64); err == nil && n >= 1<<20 && n%(512<<10) == 0 && n < e.partSize {
+// splitLimits returns the size above which a file is split, and the part size.
+func (e *Engine) splitLimits(cloudPath string) (splitAt, partSize int64) {
+	prefix := os.Getenv(envTestPath)
+	if n, err := strconv.ParseInt(os.Getenv(envTestPartSize), 10, 64); err == nil && prefix != "" && underPrefix(cloudPath, prefix) && n >= 1<<20 && n%(512<<10) == 0 && n < e.partSize {
 		return n, n
 	}
 	return e.splitAt, e.partSize
@@ -122,7 +127,7 @@ func partName(name string, p store.Part, n int) string {
 // every part is in Telegram. For files, src is the file itself and fi its
 // state before reading; the upload is dropped if it changes meanwhile.
 func (e *Engine) uploadSplit(ctx context.Context, it store.Item, src string, fi os.FileInfo, v store.Version, name, note string) outcome {
-	_, partSize := e.splitLimits()
+	_, partSize := e.splitLimits(it.CloudPath)
 	parts := layout(fi.Size(), partSize)
 	n := len(parts)
 	e.setProgress(Progress{ItemID: it.ID, CloudPath: it.CloudPath, Phase: "reading", Total: fi.Size(), Parts: n})

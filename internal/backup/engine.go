@@ -525,7 +525,7 @@ func (e *Engine) uploadFile(ctx context.Context, it store.Item, abs string) outc
 	if fi.Size() == 0 {
 		return outcome{state: store.StateSkipped, note: "empty file; nothing to back up"}
 	}
-	if splitAt, _ := e.splitLimits(); fi.Size() > splitAt {
+	if splitAt, _ := e.splitLimits(it.CloudPath); fi.Size() > splitAt {
 		return e.uploadSplit(ctx, it, abs, fi, store.Version{CloudPath: it.CloudPath, Kind: store.KindFile,
 			Mtime: fi.ModTime().Unix()}, path.Base(it.CloudPath), "")
 	}
@@ -655,7 +655,7 @@ func (e *Engine) uploadProject(ctx context.Context, it store.Item, abs string) o
 	if skipped > 0 {
 		note = fmt.Sprintf("%d file(s) were open in another program and left out of this backup", skipped)
 	}
-	if splitAt, _ := e.splitLimits(); fi.Size() > splitAt {
+	if splitAt, _ := e.splitLimits(it.CloudPath); fi.Size() > splitAt {
 		return e.uploadSplit(ctx, it, tmp, fi, store.Version{CloudPath: it.CloudPath, Kind: store.KindProject,
 			Mtime: mtime, Fingerprint: fp}, path.Base(it.CloudPath)+".zip", note)
 	}

@@ -462,8 +462,14 @@ func (s *Store) ClaimNext(quietFile, quietProject time.Duration) (Item, bool, er
 	if err != nil {
 		return Item{}, false, err
 	}
-	if _, err := s.db.Exec(`UPDATE items SET state=? WHERE id=?`, StateUploading, it.ID); err != nil {
+	// Claim it only if no other worker got there between the SELECT and now;
+	// otherwise two workers would upload the same file at once.
+	res, err := s.db.Exec(`UPDATE items SET state=? WHERE id=? AND state IN (?,?)`, StateUploading, it.ID, StatePending, StateFailed)
+	if err != nil {
 		return Item{}, false, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return Item{}, false, nil
 	}
 	it.State = StateUploading
 	return it, true, nil

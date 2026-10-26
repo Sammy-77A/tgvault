@@ -3,9 +3,11 @@ package backup
 import (
 	"archive/zip"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 	"testing"
 	"time"
 
@@ -304,5 +306,49 @@ func TestStartCooldownKeepsLatestEnd(t *testing.T) {
 	short := e.startCooldown(time.Minute)
 	if !short.Equal(long) || time.Until(e.cooldownEnd()) < 9*time.Minute {
 		t.Fatal("a shorter wait must not cut an active pause short")
+	}
+}
+
+func TestTwoWorkersNeverClaimTheSameItem(t *testing.T) {
+	_, st := newTestEngine(t)
+	root, _ := st.AddRoot(t.TempDir(), "R")
+	for i := 0; i < 20; i++ {
+		p := fmt.Sprintf("R/f%d", i)
+		if err := st.UpsertSeen(store.Item{Kind: store.KindFile, CloudPath: p, RootID: root.ID, Rel: p[2:], Size: 1, Mtime: 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	time.Sleep(1100 * time.Millisecond)
+	var mu sync.Mutex
+	claimed := map[int64]int{}
+	var wg sync.WaitGroup
+	for w := 0; w < 4; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for misses := 0; misses < 50; {
+				it, ok, err := st.ClaimNext(0, 0)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				if !ok {
+					misses++
+					continue
+				}
+				mu.Lock()
+				claimed[it.ID]++
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	if len(claimed) != 20 {
+		t.Fatalf("claimed %d items, want 20", len(claimed))
+	}
+	for id, n := range claimed {
+		if n != 1 {
+			t.Fatalf("item %d was claimed %d times", id, n)
+		}
 	}
 }
