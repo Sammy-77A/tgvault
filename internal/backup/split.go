@@ -31,6 +31,9 @@ import (
 // alone before its parts are removed.
 const orphanAge = 7 * 24 * time.Hour
 
+// bigWait is how long a file over 2 GB waits while another one is uploading.
+const bigWait = 15 * time.Minute
+
 // For testing splitting against the real channel without uploading
 // gigabytes: envTestPartSize makes parts smaller (in bytes, whole 512 KiB
 // pieces) for files under the cloud folder envTestPath only. Both are unset
@@ -127,6 +130,21 @@ func partName(name string, p store.Part, n int) string {
 // every part is in Telegram. For files, src is the file itself and fi its
 // state before reading; the upload is dropped if it changes meanwhile.
 func (e *Engine) uploadSplit(ctx context.Context, it store.Item, src string, fi os.FileInfo, v store.Version, name, note string) outcome {
+	// One file over 2 GB at a time: on a slow connection each takes hours, and
+	// the other worker keeps the rest of the backup moving meanwhile.
+	if fi.Size() > e.splitAt { // e.splitAt, not the test override: test files don't queue
+		select {
+		case e.bigSlot <- struct{}{}:
+			defer func() { <-e.bigSlot }()
+		default:
+			if v.Kind == store.KindProject {
+				e.mu.Lock()
+				e.bigProjects[it.ID] = true // don't zip it again while waiting
+				e.mu.Unlock()
+			}
+			return outcome{wait: time.Now().Add(bigWait)}
+		}
+	}
 	_, partSize := e.splitLimits(it.CloudPath)
 	parts := layout(fi.Size(), partSize)
 	n := len(parts)
@@ -181,7 +199,9 @@ func (e *Engine) uploadSplit(ctx context.Context, it store.Item, src string, fi 
 		if err != nil {
 			return outcome{state: store.StateSkipped, note: err.Error()}
 		}
-		key := fmt.Sprintf("%s\x00%s:%d", it.CloudPath, group, p.Index)
+		// Saved progress within a part is matched by the part's hash, so it
+		// survives even when the upload starts a new group.
+		key := fmt.Sprintf("%s\x00part%d", it.CloudPath, p.Index)
 		msgID, err := e.sendRange(ctx, it, key, src, partName(name, p, n), p.Offset, p.Size, p.Hash, caption,
 			func(done int64) {
 				e.setProgress(Progress{ItemID: it.ID, CloudPath: it.CloudPath, Phase: "uploading",
@@ -213,6 +233,15 @@ func (e *Engine) uploadSplit(ctx context.Context, it store.Item, src string, fi 
 	_ = e.st.DeletePartUploads(it.CloudPath, group)
 	e.prune(ctx, v.CloudPath)
 	return outcome{state: store.StateSynced, note: note}
+}
+
+// bigBusy reports whether a project known to be over 2 GB should keep
+// waiting for the upload of another big file, without zipping it again.
+func (e *Engine) bigBusy(itemID int64) bool {
+	e.mu.Lock()
+	known := e.bigProjects[itemID]
+	e.mu.Unlock()
+	return known && len(e.bigSlot) > 0
 }
 
 // dropPartUploads deletes this device's unfinished split uploads of a path

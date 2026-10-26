@@ -487,3 +487,21 @@ func TestSkippedBigFilesAreQueuedAgain(t *testing.T) {
 		t.Fatalf("item = %+v, want pending", it)
 	}
 }
+
+func TestOnlyOneBigUploadAtATime(t *testing.T) {
+	tg := newFakeTG()
+	e, st := newSplitEngine(t, tg)
+	it, abs := bigFile(t, e, st, randomBytes(t, testBigSize))
+	e.bigSlot <- struct{}{} // another big file is uploading
+	out := e.uploadFile(context.Background(), it, abs)
+	if out.wait.IsZero() || tg.count() != 0 {
+		t.Fatalf("second big file should wait: %+v, %d messages", out, tg.count())
+	}
+	<-e.bigSlot
+	if out := e.uploadFile(context.Background(), it, abs); out.state != store.StateSynced {
+		t.Fatalf("after the first finished: %+v", out)
+	}
+	if len(e.bigSlot) != 0 {
+		t.Fatal("the slot must be released after an upload")
+	}
+}

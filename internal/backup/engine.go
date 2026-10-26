@@ -44,6 +44,8 @@ type Engine struct {
 	// splitAt is the size above which files are split into several messages,
 	// and partSize the size of each; tests make them small.
 	splitAt, partSize int64
+	bigSlot           chan struct{}  // held while a file over 2 GB uploads
+	bigProjects       map[int64]bool // projects whose ZIP is over 2 GB (guarded by mu)
 
 	wake   chan struct{}
 	scanCh chan int64 // root ID, or 0 for all roots
@@ -94,15 +96,17 @@ func New(st *store.Store, tg *tgclient.Client, dataDir string) *Engine {
 
 func newEngine(st *store.Store, dataDir string) *Engine {
 	return &Engine{
-		st:       st,
-		splitAt:  meta.MaxFileSize,
-		partSize: meta.SplitPartSize,
-		tmpDir:   filepath.Join(dataDir, "tmp"),
-		wake:     make(chan struct{}, 1),
-		scanCh:   make(chan int64, 64),
-		progress: map[int64]Progress{},
-		watched:  map[string]int64{},
-		pending:  map[int64]*time.Timer{},
+		st:          st,
+		splitAt:     meta.MaxFileSize,
+		partSize:    meta.SplitPartSize,
+		bigSlot:     make(chan struct{}, 1),
+		bigProjects: map[int64]bool{},
+		tmpDir:      filepath.Join(dataDir, "tmp"),
+		wake:        make(chan struct{}, 1),
+		scanCh:      make(chan int64, 64),
+		progress:    map[int64]Progress{},
+		watched:     map[string]int64{},
+		pending:     map[int64]*time.Timer{},
 	}
 }
 
@@ -636,6 +640,9 @@ func (e *Engine) uploadProject(ctx context.Context, it store.Item, abs string) o
 	fp, _, mtime := fingerprintOf(files)
 	if latest, ok, _ := e.st.LatestVersion(it.CloudPath); ok && latest.Fingerprint == fp {
 		return outcome{state: store.StateSynced}
+	}
+	if e.bigBusy(it.ID) {
+		return outcome{wait: time.Now().Add(bigWait)}
 	}
 	e.setProgress(Progress{ItemID: it.ID, CloudPath: it.CloudPath, Phase: "zipping"})
 	tmp := filepath.Join(e.tmpDir, fmt.Sprintf("project-%d.zip", it.ID))
