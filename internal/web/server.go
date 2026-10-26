@@ -578,7 +578,7 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 	}
 	attachment(w, name)
 	w.Header().Set("Content-Length", strconv.FormatInt(v.Size, 10))
-	if err := s.eng.DownloadTo(r.Context(), v.MsgID, w); err != nil {
+	if err := s.eng.DownloadTo(r.Context(), v, w); err != nil {
 		log.Printf("download %s: %v", v.CloudPath, err)
 	}
 }

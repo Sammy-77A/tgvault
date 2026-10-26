@@ -153,3 +153,38 @@ func TestAndroidSkips(t *testing.T) {
 		t.Error(".thumbnails should be skipped")
 	}
 }
+
+func TestSplitCaption(t *testing.T) {
+	in := Info{Kind: "f", Path: "Videos/movie.mkv", Size: 5_000_000_000, Mt: 1700000000, Hash: strings.Repeat("a", 64),
+		Group: "0123456789abcdef", Part: 3, Parts: 3, PartOff: 2 * SplitPartSize, PartSize: 5_000_000_000 - 2*SplitPartSize,
+		PartHash: strings.Repeat("b", 64), EarlierID: "101,102"}
+	c, err := Caption(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(c, "📄 Videos/movie.mkv (part 3 of 3)\n") || !strings.Contains(c, `"v":2`) {
+		t.Fatalf("unexpected caption:\n%s", c)
+	}
+	got, ok := Parse(c)
+	in.V = 2
+	if !ok || got != in {
+		t.Fatalf("got %+v (%v), want %+v", got, ok, in)
+	}
+	// Inconsistent part fields are rejected rather than half-trusted.
+	for _, bad := range []Info{
+		{Kind: "f", Path: "a", Size: 10, Hash: "h", Group: "g", Part: 4, Parts: 3, PartSize: 1, PartHash: "x"},
+		{Kind: "f", Path: "a", Size: 10, Hash: "h", Group: "g", Part: 1, Parts: 3, PartOff: 8, PartSize: 5, PartHash: "x"},
+		{Kind: "f", Path: "a", Size: 10, Hash: "h", Part: 1, Parts: 3, PartSize: 5, PartHash: "x"},
+	} {
+		c, _ := Caption(bad)
+		if _, ok := Parse(c); ok {
+			t.Errorf("Parse accepted %+v", bad)
+		}
+	}
+}
+
+func TestSplitPartSizeFitsTelegram(t *testing.T) {
+	if SplitPartSize > 4000*512*1024 || SplitPartSize%(512*1024) != 0 || SplitPartSize > MaxFileSize {
+		t.Fatalf("SplitPartSize %d must be whole 512 KiB pieces under Telegram's limit", SplitPartSize)
+	}
+}

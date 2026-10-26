@@ -93,12 +93,17 @@ func (e *Engine) reconcileOnce(ctx context.Context) (int, error) {
 	}
 	seen := map[int]bool{}
 	paths := map[string]bool{}
+	groups := map[string][]partMsg{} // parts of split files, by upload
 	newest := 0
 	err = e.tg.ScanChannel(ctx, func(rf tgclient.RemoteFile) error {
 		newest = max(newest, rf.MsgID)
 		in, ok := meta.Parse(rf.Caption)
 		if !ok {
 			return nil // not a tgvault upload
+		}
+		if in.Split() {
+			groups[in.Group] = append(groups[in.Group], partMsg{rf, in})
+			return nil
 		}
 		seen[rf.MsgID] = true
 		paths[in.Path] = true
@@ -115,6 +120,14 @@ func (e *Engine) reconcileOnce(ctx context.Context) (int, error) {
 	if err != nil {
 		// An incomplete scan must never be read as "files were deleted".
 		return 0, err
+	}
+	// A split file counts only when every part is there.
+	split, err := e.reconcileGroups(ctx, groups, paths, known)
+	if err != nil {
+		return 0, err
+	}
+	for id := range split {
+		seen[id] = true
 	}
 	var missing []int
 	for id := range known {
@@ -134,6 +147,7 @@ func (e *Engine) reconcileOnce(ctx context.Context) (int, error) {
 	if err := e.st.RequeueMissing(); err != nil {
 		return 0, err
 	}
+	e.cleanPartUploads(ctx)
 	for p := range paths {
 		e.prune(ctx, p)
 	}
@@ -156,6 +170,7 @@ type Entry struct {
 	Type     string `json:"type,omitempty"` // audio, video, image, document, archive, other
 	MsgID    int    `json:"msgId,omitempty"`
 	Uploaded int64  `json:"uploaded,omitempty"`
+	Parts    int    `json:"parts,omitempty"` // messages a file over 2 GB is split into
 }
 
 // List returns the children of a cloud folder ("" = top level).
@@ -208,7 +223,7 @@ func (e *Engine) List(prefix string) ([]Entry, error) {
 		}
 		out = append(out, Entry{Name: rest, Path: v.CloudPath, Kind: kind, Size: v.Size, Mtime: v.Mtime,
 			Versions: counts[v.CloudPath], Local: local, MsgID: v.MsgID, Uploaded: v.UploadedAt,
-			Device: meta.DeviceOf(v.CloudPath), Type: meta.FileType(rest)})
+			Device: meta.DeviceOf(v.CloudPath), Type: meta.FileType(rest), Parts: v.Parts})
 	}
 	for _, f := range folders {
 		out = append(out, *f)
@@ -443,21 +458,29 @@ func restoredName(target string) string {
 }
 
 // downloadVerified downloads a version to a temp file and checks its hash.
+// Split files are joined back together on the way.
 func (e *Engine) downloadVerified(ctx context.Context, v store.Version, dir string) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	if err := checkFreeSpace(dir, v.Size); err != nil {
 		return "", err
 	}
 	f, err := os.CreateTemp(dir, ".restore-*.tgvault-tmp")
 	if err != nil {
 		return "", err
 	}
-	h := sha256.New()
-	err = e.tg.Download(ctx, v.MsgID, io.MultiWriter(f, h))
+	if v.Parts > 0 {
+		err = e.downloadParts(ctx, v, f)
+	} else {
+		h := sha256.New()
+		err = e.tg.Download(ctx, v.MsgID, io.MultiWriter(f, h))
+		if err == nil && hex.EncodeToString(h.Sum(nil)) != v.Hash {
+			err = errors.New("downloaded file failed its integrity check")
+		}
+	}
 	if cerr := f.Close(); err == nil {
 		err = cerr
-	}
-	if err == nil && hex.EncodeToString(h.Sum(nil)) != v.Hash {
-		err = errors.New("downloaded file failed its integrity check")
 	}
 	if err != nil {
 		os.Remove(f.Name())
@@ -586,9 +609,11 @@ func (e *Engine) Versions(p string) ([]store.Version, error) { return e.st.Versi
 // Version returns one version.
 func (e *Engine) Version(msgID int) (store.Version, error) { return e.st.Version(msgID) }
 
-// DownloadTo streams one stored version to w.
-func (e *Engine) DownloadTo(ctx context.Context, msgID int, w io.Writer) error {
-	return e.tg.Download(ctx, msgID, w)
+// DownloadTo streams one stored version to w, joining split files. If a part
+// fails its check, it returns an error partway; the caller must then abandon
+// w so the half-written file isn't kept.
+func (e *Engine) DownloadTo(ctx context.Context, v store.Version, w io.Writer) error {
+	return e.streamVersion(ctx, v, w)
 }
 
 // WriteZip streams a cloud folder as a ZIP, with projects unpacked into their folders.
@@ -636,7 +661,7 @@ func (e *Engine) WriteZipMany(ctx context.Context, prefixes []string, w io.Write
 		if err != nil {
 			return err
 		}
-		if err := e.tg.Download(ctx, v.MsgID, fw); err != nil {
+		if err := e.streamVersion(ctx, v, fw); err != nil {
 			return fmt.Errorf("%s: %w", v.CloudPath, err)
 		}
 	}
@@ -753,10 +778,13 @@ func (e *Engine) DeleteFromCloudMany(ctx context.Context, prefixes []string) (in
 			for j, v := range batch {
 				ids[j] = v.MsgID
 			}
-			err := e.tg.DeleteMessages(ctx, ids)
+			msgs, err := e.messageIDsOf(batch) // every part of split files
+			if err == nil {
+				err = e.tg.DeleteMessages(ctx, msgs)
+			}
 			if d, ok := tgerr.AsFloodWait(err); ok {
 				time.Sleep(d + time.Second)
-				err = e.tg.DeleteMessages(ctx, ids)
+				err = e.tg.DeleteMessages(ctx, msgs)
 			}
 			if err != nil {
 				t.update(func(t *Task) {
@@ -858,16 +886,17 @@ func (e *Engine) FreeSpaceMany(ctx context.Context, prefixes []string) (int64, e
 	go func() {
 		ctx := context.WithoutCancel(ctx)
 		var freed int64
-		// Confirm every candidate's latest version still exists in Telegram.
-		var ids []int
+		// Confirm every message of every candidate's latest version (all parts
+		// of a split file) still exists in Telegram with the right size.
+		var vs []store.Version
 		latest := map[string]store.Version{}
 		for _, c := range plan.Candidates {
 			if v, ok, _ := e.st.LatestVersion(c.CloudPath); ok {
 				latest[c.CloudPath] = v
-				ids = append(ids, v.MsgID)
+				vs = append(vs, v)
 			}
 		}
-		remote, err := e.tg.Exists(ctx, ids)
+		problems, err := e.checkInTelegram(ctx, vs)
 		if err != nil {
 			t.update(func(t *Task) {
 				t.Errors = append(t.Errors, "could not check Telegram, so nothing was deleted: "+tgclient.Friendly(err))
@@ -878,15 +907,12 @@ func (e *Engine) FreeSpaceMany(ctx context.Context, prefixes []string) (int64, e
 		var dirs []freedDir
 		for _, c := range plan.Candidates {
 			t.update(func(t *Task) { t.Current = c.CloudPath })
-			v := latest[c.CloudPath]
-			rf, ok := remote[v.MsgID]
-			var problem string
+			v, ok := latest[c.CloudPath]
+			problem := problems[v.MsgID]
 			switch {
 			case !ok:
-				problem = "its backup is missing in Telegram"
-			case rf.Size != v.Size:
-				problem = "its backup in Telegram has the wrong size"
-			default:
+				problem = "its backup is missing"
+			case problem == "":
 				problem = e.deleteLocal(c, v, &dirs)
 			}
 			t.update(func(t *Task) {

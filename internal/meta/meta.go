@@ -5,14 +5,19 @@ package meta
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path"
 	"strings"
 	"unicode"
 )
 
 // MaxFileSize is the largest file Telegram accepts (4000 parts of 512 KiB),
-// rounded down for safety.
+// rounded down for safety. Bigger files are stored in several messages.
 const MaxFileSize = 2_000_000_000
+
+// SplitPartSize is how many bytes each message of a split file holds: 3800
+// upload pieces of 512 KiB, about 1.99 GB, safely under Telegram's limit.
+const SplitPartSize = 3800 * 512 * 1024
 
 // MaxCaption is Telegram's caption limit for regular accounts.
 const MaxCaption = 1024
@@ -30,7 +35,20 @@ type Info struct {
 	Hash string `json:"h"`           // sha256 of the uploaded bytes
 	FP   string `json:"t,omitempty"` // project fingerprint
 	Dev  string `json:"d,omitempty"` // device that uploaded it: "PC" or "Phone"
+
+	// Set on each message of a file split into several (caption version 2).
+	// Size, Hash and Mt above describe the whole file.
+	Group     string `json:"g,omitempty"`   // shared by every part of one upload
+	Part      int    `json:"pi,omitempty"`  // this part's number, from 1
+	Parts     int    `json:"pn,omitempty"`  // how many parts there are
+	PartOff   int64  `json:"po,omitempty"`  // where this part starts in the file
+	PartSize  int64  `json:"ps,omitempty"`  // this part's size
+	PartHash  string `json:"ph,omitempty"`  // sha256 of this part
+	EarlierID string `json:"ids,omitempty"` // on the last part: message IDs of the earlier parts, comma-separated
 }
+
+// Split reports whether the caption belongs to one part of a split file.
+func (in Info) Split() bool { return in.Parts > 0 }
 
 // Device names. The PC's backups keep their original paths ("Documents/…");
 // every other device's backups live under a folder named after it ("Phone/…").
@@ -59,6 +77,11 @@ func DevicePrefix(device string) string {
 // each folder, and the machine-readable line.
 func Caption(in Info) (string, error) {
 	in.V = 1
+	if in.Split() {
+		// Version 2: older tgvault builds ignore these messages instead of
+		// mistaking one part for the whole file.
+		in.V = 2
+	}
 	js, err := json.Marshal(in)
 	if err != nil {
 		return "", err
@@ -72,6 +95,9 @@ func Caption(in Info) (string, error) {
 		icon = "📦 "
 	}
 	human := icon + in.Path
+	if in.Split() {
+		human += fmt.Sprintf(" (part %d of %d)", in.Part, in.Parts)
+	}
 	tags := Hashtags(in.Path, in.Kind == "p")
 	caption := human + "\n" + tags + "\n" + machine
 	if len(caption) <= MaxCaption {
@@ -94,7 +120,14 @@ func Parse(caption string) (Info, bool) {
 		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, marker)), &in); err != nil {
 			return Info{}, false
 		}
-		if in.V != 1 || in.Path == "" || (in.Kind != "f" && in.Kind != "p") {
+		if in.Path == "" || (in.Kind != "f" && in.Kind != "p") {
+			return Info{}, false
+		}
+		switch {
+		case in.V == 1 && !in.Split():
+		case in.V == 2 && in.Parts >= 2 && in.Part >= 1 && in.Part <= in.Parts && in.Group != "" &&
+			in.PartOff >= 0 && in.PartSize > 0 && in.PartOff+in.PartSize <= in.Size && in.PartHash != "":
+		default:
 			return Info{}, false
 		}
 		return in, true

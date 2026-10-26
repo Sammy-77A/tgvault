@@ -54,9 +54,14 @@ The Android app backs up the phone into the same Telegram backup. It runs the sa
 
 GitHub Actions builds it (`.github/workflows/android.yml`) for 64-bit ARM phones (nearly all current phones; x86 Android emulators block a system call the SQLite library uses): `gomobile bind` turns the `mobile` package into an Android library, then Gradle builds the app in `android/`. Each push to `main` updates the android-test pre-release. Release signing uses the repository secrets `ANDROID_KEYSTORE_B64`, `ANDROID_KEYSTORE_PASSWORD` and `ANDROID_KEY_ALIAS`; keep an offline copy of that key, or updates won't install over the existing app.
 
+## Files over 2 GB
+
+Telegram stores at most about 2 GB per message, so bigger files are stored as several messages, each holding the next 1.99 GB of the file: `movie.mkv.part1of3`, `movie.mkv.part2of3`, … tgvault joins them back together when you restore or download, and checks every part and the whole file against their SHA-256 fingerprints. A file only counts as backed up once every part is in Telegram, and an interrupted upload continues where it stopped.
+
+The parts are a plain split, so you can also rebuild a file without tgvault: download every part from the channel and join them in order, e.g. `copy /b movie.mkv.part1of3 + movie.mkv.part2of3 + movie.mkv.part3of3 movie.mkv` on Windows or `cat movie.mkv.part* > movie.mkv` elsewhere. Restoring needs as much free space as the file itself; tgvault checks first.
+
 ## Limits (for now)
 
-- Files over 2 GB are skipped with a warning (Telegram's per-file limit).
 - Empty files aren't stored.
 - A file that changes constantly (like an open log) won't be uploaded until it has been still for 20 seconds.
 

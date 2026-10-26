@@ -44,7 +44,8 @@ func randInt64() int64 {
 type UploadRequest struct {
 	Path     string // local file to read
 	Name     string // file name shown in Telegram
-	Size     int64
+	Size     int64  // bytes to upload
+	Offset   int64  // where they start in the file (for one part of a split file)
 	Caption  string
 	Resume   *store.Resume           // saved progress for big files, may be nil
 	Hash     string                  // content hash, used to validate resume
@@ -190,11 +191,15 @@ func uploadParts(ctx context.Context, api *tg.Client, f *os.File, req UploadRequ
 		g.Go(func() error {
 			buf := make([]byte, partSize)
 			for p := range parts {
-				n, err := f.ReadAt(buf, int64(p)*partSize)
+				want := buf[:min(int64(partSize), req.Size-int64(p)*partSize)]
+				n, err := f.ReadAt(want, req.Offset+int64(p)*partSize)
 				if err != nil && !errors.Is(err, io.EOF) {
 					return err
 				}
-				data := buf[:n]
+				if n != len(want) {
+					return errors.New("the file got shorter while uploading")
+				}
+				data := want
 				if err := savePart(gctx, api, big, fileID, p, total, data); err != nil {
 					return err
 				}

@@ -106,7 +106,7 @@ func Open(path string) (*Store, error) {
 	}
 	// SQLite allows one writer; a single connection avoids "database is locked".
 	db.SetMaxOpenConns(1)
-	if _, err := db.Exec(schema); err != nil {
+	if _, err := db.Exec(schema + partsSchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("create schema: %w", err)
 	}
@@ -499,6 +499,9 @@ func (s *Store) ResetUploading() error {
 	if _, err := s.db.Exec(`UPDATE items SET state=? WHERE state=?`, StatePending, StateUploading); err != nil {
 		return err
 	}
+	if err := s.RequeueTooBig(); err != nil {
+		return err
+	}
 	// Older versions recorded Telegram rate limits as failures; they are just waits.
 	_, err := s.db.Exec(`UPDATE items SET state=?, note='', attempts=0, next_attempt=0
 		WHERE state=? AND note LIKE 'Telegram asked tgvault to slow down%'`, StatePending, StateFailed)
@@ -577,12 +580,13 @@ type Version struct {
 	Hash        string `json:"hash"`
 	Fingerprint string `json:"-"`
 	UploadedAt  int64  `json:"uploadedAt"`
+	Parts       int    `json:"parts,omitempty"` // messages it's split into; 0 for one message
 }
 
 const versionCols = `msg_id,cloud_path,kind,size,mtime,hash,fingerprint,uploaded_at`
 
 func (s *Store) queryVersions(q string, args ...any) ([]Version, error) {
-	rows, err := s.db.Query(`SELECT `+versionCols+` FROM versions `+q, args...)
+	rows, err := s.db.Query(`SELECT `+versionCols+`,(SELECT COUNT(*) FROM parts WHERE parts.version_id=versions.msg_id) FROM versions `+q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -590,7 +594,7 @@ func (s *Store) queryVersions(q string, args ...any) ([]Version, error) {
 	var out []Version
 	for rows.Next() {
 		var v Version
-		if err := rows.Scan(&v.MsgID, &v.CloudPath, &v.Kind, &v.Size, &v.Mtime, &v.Hash, &v.Fingerprint, &v.UploadedAt); err != nil {
+		if err := rows.Scan(&v.MsgID, &v.CloudPath, &v.Kind, &v.Size, &v.Mtime, &v.Hash, &v.Fingerprint, &v.UploadedAt, &v.Parts); err != nil {
 			return nil, err
 		}
 		out = append(out, v)
@@ -685,6 +689,9 @@ func (s *Store) DeleteVersions(msgIDs []int) error {
 		if _, err := s.db.Exec(`DELETE FROM versions WHERE msg_id=?`, id); err != nil {
 			return err
 		}
+		if _, err := s.db.Exec(`DELETE FROM parts WHERE version_id=?`, id); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -735,7 +742,7 @@ func (s *Store) AllVersionIDs() (map[int]bool, error) {
 
 // ClearCloud forgets all cloud versions and resume state (used on logout).
 func (s *Store) ClearCloud() error {
-	for _, q := range []string{`DELETE FROM versions`, `DELETE FROM resumes`, `UPDATE items SET state='pending', attempts=0, next_attempt=0 WHERE state!='skipped'`} {
+	for _, q := range []string{`DELETE FROM versions`, `DELETE FROM parts`, `DELETE FROM part_uploads`, `DELETE FROM resumes`, `UPDATE items SET state='pending', attempts=0, next_attempt=0 WHERE state!='skipped'`} {
 		if _, err := s.db.Exec(q); err != nil {
 			return err
 		}

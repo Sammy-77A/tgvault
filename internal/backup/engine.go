@@ -38,8 +38,12 @@ const (
 // Engine runs scanning, uploading and restoring.
 type Engine struct {
 	st     *store.Store
-	tg     *tgclient.Client
+	tg     telegram
 	tmpDir string
+
+	// splitAt is the size above which files are split into several messages,
+	// and partSize the size of each; tests make them small.
+	splitAt, partSize int64
 
 	wake   chan struct{}
 	scanCh chan int64 // root ID, or 0 for all roots
@@ -66,6 +70,8 @@ type Progress struct {
 	Phase     string `json:"phase"`
 	Done      int64  `json:"done"`
 	Total     int64  `json:"total"`
+	Part      int    `json:"part,omitempty"`  // for split files: the part being uploaded
+	Parts     int    `json:"parts,omitempty"` // and how many there are
 	updated   time.Time
 }
 
@@ -79,9 +85,18 @@ type Reconcile struct {
 
 // New creates an engine.
 func New(st *store.Store, tg *tgclient.Client, dataDir string) *Engine {
+	e := newEngine(st, dataDir)
+	if tg != nil {
+		e.tg = tg
+	}
+	return e
+}
+
+func newEngine(st *store.Store, dataDir string) *Engine {
 	return &Engine{
 		st:       st,
-		tg:       tg,
+		splitAt:  meta.MaxFileSize,
+		partSize: meta.SplitPartSize,
 		tmpDir:   filepath.Join(dataDir, "tmp"),
 		wake:     make(chan struct{}, 1),
 		scanCh:   make(chan int64, 64),
@@ -507,11 +522,12 @@ func (e *Engine) uploadFile(ctx context.Context, it store.Item, abs string) outc
 	if err != nil {
 		return e.failure(ctx, err)
 	}
-	if fi.Size() > meta.MaxFileSize {
-		return outcome{state: store.StateSkipped, note: "over 2 GB; Telegram can't store files this big yet"}
-	}
 	if fi.Size() == 0 {
 		return outcome{state: store.StateSkipped, note: "empty file; nothing to back up"}
+	}
+	if splitAt, _ := e.splitLimits(); fi.Size() > splitAt {
+		return e.uploadSplit(ctx, it, abs, fi, store.Version{CloudPath: it.CloudPath, Kind: store.KindFile,
+			Mtime: fi.ModTime().Unix()}, path.Base(it.CloudPath), "")
 	}
 	e.setProgress(Progress{ItemID: it.ID, CloudPath: it.CloudPath, Phase: "reading", Total: fi.Size()})
 	hash, err := hashFile(abs)
@@ -549,28 +565,36 @@ func uploadStillValid(before, after os.FileInfo, statErr error) bool {
 }
 
 func (e *Engine) send(ctx context.Context, it store.Item, abs, name string, size int64, hash, caption string) (int, error) {
+	return e.sendRange(ctx, it, it.CloudPath, abs, name, 0, size, hash, caption, func(done int64) {
+		e.setProgress(Progress{ItemID: it.ID, CloudPath: it.CloudPath, Phase: "uploading", Done: done, Total: size})
+	})
+}
+
+// sendRange posts size bytes of abs, starting at offset, as one message.
+// Progress within a big upload is saved under key, so an interrupted upload
+// continues where it stopped.
+func (e *Engine) sendRange(ctx context.Context, it store.Item, key, abs, name string, offset, size int64, hash, caption string,
+	progress func(done int64)) (int, error) {
 	var resume *store.Resume
-	if r, ok := e.st.GetResume(it.CloudPath); ok {
+	if r, ok := e.st.GetResume(key); ok {
 		resume = &r
 	}
 	req := tgclient.UploadRequest{
-		Path: abs, Name: name, Size: size, Caption: caption, Resume: resume, Hash: hash,
-		OnResume: func(r store.Resume) { _ = e.st.SaveResume(it.CloudPath, r) },
-		Progress: func(done, total int64) {
-			e.setProgress(Progress{ItemID: it.ID, CloudPath: it.CloudPath, Phase: "uploading", Done: done, Total: total})
-		},
+		Path: abs, Name: name, Size: size, Offset: offset, Caption: caption, Resume: resume, Hash: hash,
+		OnResume: func(r store.Resume) { _ = e.st.SaveResume(key, r) },
+		Progress: func(done, _ int64) { progress(done) },
 	}
 	msgID, err := e.tg.Upload(ctx, req)
 	if errors.Is(err, tgclient.ErrPartsExpired) && resume != nil {
-		// Telegram dropped the earlier parts; start this file over.
-		_ = e.st.ClearResume(it.CloudPath)
+		// Telegram dropped the earlier pieces; start this message over.
+		_ = e.st.ClearResume(key)
 		req.Resume = nil
 		msgID, err = e.tg.Upload(ctx, req)
 	}
 	if err != nil {
 		return 0, err
 	}
-	_ = e.st.ClearResume(it.CloudPath)
+	_ = e.st.ClearResume(key)
 	return msgID, nil
 }
 
@@ -592,7 +616,11 @@ func (e *Engine) prune(ctx context.Context, cloudPath string) {
 	for _, v := range vs[keepVersions:] {
 		old = append(old, v.MsgID)
 	}
-	if err := e.tg.DeleteMessages(ctx, old); err != nil {
+	msgs, err := e.messageIDsOf(vs[keepVersions:])
+	if err != nil {
+		return
+	}
+	if err := e.tg.DeleteMessages(ctx, msgs); err != nil {
 		log.Printf("prune %s: %v (will retry later)", cloudPath, err)
 		return
 	}
@@ -623,8 +651,13 @@ func (e *Engine) uploadProject(ctx context.Context, it store.Item, abs string) o
 	if err != nil {
 		return e.failure(ctx, err)
 	}
-	if fi.Size() > meta.MaxFileSize {
-		return outcome{state: store.StateSkipped, note: "the project ZIP is over 2 GB; too big for Telegram"}
+	note := ""
+	if skipped > 0 {
+		note = fmt.Sprintf("%d file(s) were open in another program and left out of this backup", skipped)
+	}
+	if splitAt, _ := e.splitLimits(); fi.Size() > splitAt {
+		return e.uploadSplit(ctx, it, tmp, fi, store.Version{CloudPath: it.CloudPath, Kind: store.KindProject,
+			Mtime: mtime, Fingerprint: fp}, path.Base(it.CloudPath)+".zip", note)
 	}
 	hash, err := hashFile(tmp)
 	if err != nil {
@@ -637,10 +670,6 @@ func (e *Engine) uploadProject(ctx context.Context, it store.Item, abs string) o
 	msgID, err := e.send(ctx, it, tmp, path.Base(it.CloudPath)+".zip", fi.Size(), hash, caption)
 	if err != nil {
 		return e.failure(ctx, err)
-	}
-	note := ""
-	if skipped > 0 {
-		note = fmt.Sprintf("%d file(s) were open in another program and left out of this backup", skipped)
 	}
 	return e.recordVersion(ctx, store.Version{MsgID: msgID, CloudPath: it.CloudPath, Kind: store.KindProject,
 		Size: fi.Size(), Mtime: mtime, Hash: hash, Fingerprint: fp, UploadedAt: time.Now().Unix()}, note)

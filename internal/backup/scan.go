@@ -138,10 +138,6 @@ func (e *Engine) scanRoot(root store.Root) {
 			}
 			it := store.Item{Kind: store.KindFile, CloudPath: cloudPath(root.Label, childRel), RootID: root.ID,
 				Rel: childRel, Size: fi.Size(), Mtime: fi.ModTime().Unix()}
-			switch {
-			case fi.Size() > meta.MaxFileSize:
-				it.State, it.Note = store.StateSkipped, "over 2 GB; Telegram can't store files this big yet"
-			}
 			upsert(it)
 		}
 	}

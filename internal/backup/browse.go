@@ -11,8 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gotd/td/tgerr"
-
 	"github.com/Sammy-77A/tgvault/internal/meta"
 	"github.com/Sammy-77A/tgvault/internal/store"
 	"github.com/Sammy-77A/tgvault/internal/tgclient"
@@ -57,6 +55,14 @@ func (e *Engine) SyncNew(ctx context.Context) (int, error) {
 		newest = max(newest, rf.MsgID)
 		in, ok := meta.Parse(rf.Caption)
 		if !ok {
+			return nil
+		}
+		if in.Split() {
+			// Only the last part completes a split file; it lists the others.
+			if ok, err := e.addSplitFromLastPart(ctx, rf, in); err != nil || !ok {
+				return err
+			}
+			added++
 			return nil
 		}
 		if _, err := e.st.Version(rf.MsgID); err == nil {
@@ -140,7 +146,7 @@ func (e *Engine) Search(q Query) ([]Entry, int, error) {
 		}
 		out = append(out, Entry{Name: name, Path: v.CloudPath, Kind: kind, Size: v.Size, Mtime: v.Mtime,
 			Versions: counts[v.CloudPath], Local: localState(v, byPath, e.Device()), MsgID: v.MsgID,
-			Uploaded: v.UploadedAt, Device: meta.DeviceOf(v.CloudPath), Type: typ})
+			Uploaded: v.UploadedAt, Device: meta.DeviceOf(v.CloudPath), Type: typ, Parts: v.Parts})
 	}
 	return out, total, nil
 }
@@ -212,6 +218,12 @@ func (e *Engine) moveVersion(ctx context.Context, v store.Version, to string) er
 	if existing, ok, _ := e.st.LatestVersion(to); ok && existing.MsgID != v.MsgID && existing.Hash != v.Hash {
 		return errors.New("a different file already has that name there; rename or remove it first")
 	}
+	if v.Parts > 0 {
+		if err := e.editSplitCaptions(ctx, v, to); err != nil {
+			return err
+		}
+		return e.st.MoveVersion(v.MsgID, to)
+	}
 	kind := "f"
 	if v.Kind == store.KindProject {
 		kind = "p"
@@ -221,12 +233,7 @@ func (e *Engine) moveVersion(ctx context.Context, v store.Version, to string) er
 	if err != nil {
 		return err
 	}
-	err = e.tg.EditCaption(ctx, v.MsgID, caption)
-	if d, ok := tgerr.AsFloodWait(err); ok {
-		time.Sleep(d + time.Second)
-		err = e.tg.EditCaption(ctx, v.MsgID, caption)
-	}
-	if err != nil {
+	if err := e.editCaption(ctx, v.MsgID, caption); err != nil {
 		return err
 	}
 	return e.st.MoveVersion(v.MsgID, to)
@@ -243,8 +250,23 @@ func (e *Engine) Links(prefixes []string) ([]string, error) {
 			return nil, err
 		}
 		for _, v := range vs {
-			if l := e.tg.MessageLink(v.MsgID); l != "" && !seen[v.MsgID] {
-				seen[v.MsgID] = true
+			if seen[v.MsgID] {
+				continue
+			}
+			seen[v.MsgID] = true
+			parts, err := e.pieces(v)
+			if err != nil {
+				return nil, err
+			}
+			for _, p := range parts {
+				l := e.tg.MessageLink(p.MsgID)
+				if l == "" {
+					continue
+				}
+				if len(parts) > 1 {
+					// The parts must be downloaded and joined to get the file back.
+					l = fmt.Sprintf("%s (part %d of %d): %s", path.Base(v.CloudPath), p.Index, len(parts), l)
+				}
 				out = append(out, l)
 			}
 		}

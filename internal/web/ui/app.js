@@ -330,7 +330,8 @@ function renderOverview() {
 
   const ups = uploading.sort((a, b) => a.cloudPath.localeCompare(b.cloudPath)).map((u) => {
     const pct = u.total ? Math.round((u.done / u.total) * 100) : 0;
-    const label = u.phase === "uploading" ? `${bytes(u.done)} of ${bytes(u.total)}` : u.phase;
+    const part = u.parts ? (u.part ? ` · part ${u.part} of ${u.parts}` : ` · ${u.parts} parts`) : "";
+    const label = (u.phase === "uploading" ? `${bytes(u.done)} of ${bytes(u.total)}` : u.phase) + part;
     return el("div", { class: "uploads" },
       el("div", { class: "sub" }, `${u.cloudPath} — ${label}`),
       el("div", { class: "progress" }, el("div", { style: `width:${pct}%` })));
@@ -563,7 +564,7 @@ function cloudRow(e) {
   const folder = e.path.includes("/") ? e.path.slice(0, e.path.lastIndexOf("/")) : "";
   const sub = isFolder
     ? `${e.files} item${e.files > 1 ? "s" : ""} · ${bytes(e.size)}`
-    : `${bytes(e.size)} · modified ${when(e.mtime)}${e.versions > 1 ? ` · ${e.versions} versions` : ""}${e.kind === "project" ? " · project ZIP" : ""}`;
+    : `${bytes(e.size)} · modified ${when(e.mtime)}${e.versions > 1 ? ` · ${e.versions} versions` : ""}${e.parts ? ` · stored in ${e.parts} parts` : ""}${e.kind === "project" ? " · project ZIP" : ""}`;
   let shift = false;
   const box = el("input", {
     type: "checkbox", class: "pick", "aria-label": `Select ${e.name}`, checked: cloud.selected.has(e.path),
@@ -908,7 +909,7 @@ async function showVersions(entry) {
   const body = el("ul", { class: "list" }, vs.map((v, i) => el("li", {},
     el("div", { class: "grow" },
       el("div", { class: "name" }, i === 0 ? "Latest" : `Older version ${i}`),
-      el("div", { class: "sub" }, `${bytes(v.size)} · backed up ${when(v.uploadedAt)}`)),
+      el("div", { class: "sub" }, `${bytes(v.size)} · backed up ${when(v.uploadedAt)}${v.parts ? ` · ${v.parts} parts` : ""}`)),
     onPhone ? null : el("a", { class: "btn small", href: `/api/download?msg=${v.msgId}` }, "Download"))));
   await dialog({ title: entry.name, body, buttons: [{ label: "Close", value: null }] });
 }
@@ -1020,7 +1021,7 @@ const activityGroups = [
   ["uploading", "Uploading now", "Files being sent right now."],
   ["failed", "Needs attention", "These failed for a reason other than Telegram's speed limit. tgvault keeps retrying them."],
   ["pending", "Queued", "Waiting their turn. Files upload a few at a time to stay within Telegram's speed limit."],
-  ["skipped", "Not backed up", "tgvault won't upload these (for example files over 2 GB)."],
+  ["skipped", "Not backed up", "tgvault won't upload these (for example paths too long for Telegram)."],
 ];
 
 async function loadActivity() {
