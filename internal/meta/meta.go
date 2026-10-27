@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"path/filepath"
 	"strings"
 	"unicode"
 )
@@ -234,6 +235,19 @@ var alwaysSkipDirs = map[string]bool{
 	// Android: generated thumbnails and WhatsApp's temporary statuses.
 	".thumbnails": true,
 	".Statuses":   true,
+}
+
+// SkipAppCache reports whether a folder, by its full path, is a cache another
+// app fills again by itself. WhatsApp keeps these as hidden folders in its
+// Media folder: link preview pictures (.Links), business profiles (a folder
+// with a random name) and more. The chats' photos, videos and documents are in
+// the visible folders next to them.
+func SkipAppCache(abs string) bool {
+	if !strings.HasPrefix(filepath.Base(abs), ".") {
+		return false
+	}
+	media := filepath.Dir(abs)
+	return filepath.Base(media) == "Media" && strings.HasPrefix(filepath.Base(filepath.Dir(media)), "WhatsApp")
 }
 
 // SkipPath reports whether a folder, by its path inside a backup folder, is one

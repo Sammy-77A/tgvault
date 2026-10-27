@@ -1,6 +1,7 @@
 package meta
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -151,6 +152,20 @@ func TestAndroidSkips(t *testing.T) {
 	}
 	if !SkipDir(".thumbnails", nil, func(string) bool { return false }) {
 		t.Error(".thumbnails should be skipped")
+	}
+	for _, app := range []string{"WhatsApp", "WhatsApp Business"} {
+		media := filepath.Join("sdcard", "Android", "media", "com.whatsapp", app, "Media")
+		for _, dir := range []string{".Links", ".udDHFY8K4Eqg", ".wamocache"} {
+			if !SkipAppCache(filepath.Join(media, dir)) {
+				t.Errorf("%s/%s should be skipped", app, dir)
+			}
+		}
+		if SkipAppCache(filepath.Join(media, "WhatsApp Images")) {
+			t.Errorf("%s photos must be backed up", app)
+		}
+	}
+	if SkipAppCache(filepath.Join("Projects", "Media", ".git")) {
+		t.Error("only WhatsApp's Media folder holds app caches")
 	}
 }
 

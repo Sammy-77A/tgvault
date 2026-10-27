@@ -123,7 +123,7 @@ func (e *Engine) scanRoot(root store.Root) {
 				continue
 			}
 			if d.IsDir() {
-				if meta.SkipDir(name, ms, dirHasFile(childAbs)) || meta.SkipPath(childRel) || e.skipAbs(childAbs) {
+				if meta.SkipDir(name, ms, dirHasFile(childAbs)) || meta.SkipPath(childRel) || meta.SkipAppCache(childAbs) || e.skipAbs(childAbs) {
 					continue
 				}
 				walk(childAbs, childRel)

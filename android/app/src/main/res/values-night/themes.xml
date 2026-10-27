@@ -1,0 +1,10 @@
+<resources>
+    <!-- Used when the phone is in dark mode. The page follows the theme: a
+         light theme makes the WebView report prefers-color-scheme: light. -->
+    <style name="Theme.Tgvault" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">#1b1f1e</item>
+        <item name="android:navigationBarColor">#121514</item>
+        <item name="android:windowBackground">@color/night_bg</item>
+    </style>
+    <color name="night_bg">#121514</color>
+</resources>
