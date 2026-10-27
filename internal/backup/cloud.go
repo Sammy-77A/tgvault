@@ -297,7 +297,10 @@ func (t *Task) update(f func(t *Task)) {
 func (e *Engine) newTask(kind, title string) *Task {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	t := &Task{ID: time.Now().UnixNano(), Kind: kind, Title: title, Started: time.Now()}
+	// IDs go to the browser as JSON numbers, which lose precision above 2^53,
+	// so use milliseconds (unique across restarts) rather than nanoseconds.
+	e.lastTask = max(e.lastTask+1, time.Now().UnixMilli())
+	t := &Task{ID: e.lastTask, Kind: kind, Title: title, Started: time.Now()}
 	// Keep finished tasks for a while so the UI can show results.
 	kept := e.tasks[:0]
 	for _, old := range e.tasks {

@@ -57,6 +57,7 @@ type Engine struct {
 	watched   map[string]int64
 	pending   map[int64]*time.Timer
 	tasks     []*Task
+	lastTask  int64 // task IDs; see newTask
 	reconcile Reconcile
 	// Telegram rate limits apply to the whole account, so when one upload is
 	// told to wait, every upload waits until cooldown.

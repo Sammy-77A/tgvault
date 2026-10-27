@@ -505,3 +505,24 @@ func TestOnlyOneBigUploadAtATime(t *testing.T) {
 		t.Fatal("the slot must be released after an upload")
 	}
 }
+
+// Task IDs reach the browser as JSON numbers; above 2^53 JavaScript rounds
+// them and Dismiss sends an ID that matches nothing.
+func TestTaskIDsSurviveJavaScriptAndDismiss(t *testing.T) {
+	e, _ := newSplitEngine(t, newFakeTG())
+	a, b := e.newTask("restore", "a"), e.newTask("restore", "b")
+	if a.ID == b.ID {
+		t.Fatal("two tasks got the same ID")
+	}
+	for _, task := range []*Task{a, b} {
+		if task.ID > 1<<53 {
+			t.Fatalf("task ID %d is too big for JavaScript", task.ID)
+		}
+	}
+	a.update(func(t *Task) { t.Finished = true })
+	e.DismissTask(a.ID)
+	tasks := e.Status().Tasks
+	if len(tasks) != 1 || tasks[0].ID != b.ID {
+		t.Fatalf("after dismissing a, tasks = %+v", tasks)
+	}
+}
