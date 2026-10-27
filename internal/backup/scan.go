@@ -208,7 +208,8 @@ func projectFiles(dir string) []projectFile {
 				}
 				continue
 			}
-			if !d.Type().IsRegular() || meta.SkipFile(name) {
+			// tgvault's own notes inside change ZIPs aren't project files.
+			if !d.Type().IsRegular() || meta.SkipFile(name) || (rel == "" && (name == changeDeleted || name == changeNote)) {
 				continue
 			}
 			fi, err := d.Info()

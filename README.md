@@ -8,9 +8,9 @@ A lightweight backup app that keeps your folders safe in your own Telegram accou
 
 - **One-way backup.** Files only go from your PC to Telegram. tgvault never deletes your local files on its own, and deleting a local file never deletes its Telegram copy. That's what lets you free up disk space safely.
 - **Folders are kept.** Every upload carries its full path (for example `Documents/Taxes/2025/return.pdf`) in its Telegram caption, plus hashtags for each folder. tgvault shows your real folder tree and restores whole folders with every subfolder in place. Because the paths live in Telegram, a fresh install can rebuild the list from Telegram alone.
-- **Code projects are one ZIP.** Folders with a `.git`, `package.json`, `composer.json`, `go.mod` and similar are offered as *projects*. Once you confirm, each project is backed up as a single ZIP a few minutes after you stop editing. Rebuildable folders (`node_modules`, and `vendor`, `target`, `build`, virtualenvs when the project type makes that certain) are left out. `.git` and `.env` are kept.
+- **Code projects are one ZIP.** Folders with a `.git`, `package.json`, `composer.json`, `go.mod` and similar are offered as *projects*. Once you confirm, each project is backed up a few minutes after you stop editing: now and then as a full ZIP, and in between as small change ZIPs holding only what changed (see [Projects](#projects)). Rebuildable folders (`node_modules`, and `vendor`, `target`, `build`, virtualenvs when the project type makes that certain) are left out. `.git` and `.env` are kept.
 - **No stuck syncs.** Each file is its own job. A file that fails retries on its own schedule with the reason shown next to it, and everything else keeps going. Telegram "slow down" requests only pause what they affect.
-- **Versions.** Edited files are uploaded as new versions; the last 3 are kept.
+- **Versions.** Edited files are uploaded as new versions; the last 3 are kept. Every backup of a project is a version you can restore.
 - **Free up space.** Deletes local copies only after re-checking that the Telegram copy exists and matches.
 - **Restore never overwrites.** If a different file is already in the way, the restored copy gets "(restored)" in its name.
 
@@ -59,6 +59,17 @@ GitHub Actions builds it (`.github/workflows/android.yml`) for 64-bit ARM phones
 Telegram stores at most about 2 GB per message, so bigger files are stored as several messages, each holding the next 1.99 GB of the file: `movie.mkv.part1of3`, `movie.mkv.part2of3`, … tgvault joins them back together when you restore or download, and checks every part and the whole file against their SHA-256 fingerprints. A file only counts as backed up once every part is in Telegram, and an interrupted upload continues where it stopped.
 
 The parts are a plain split, so you can also rebuild a file without tgvault: download every part from the channel and join them in order, e.g. `copy /b movie.mkv.part1of3 + movie.mkv.part2of3 + movie.mkv.part3of3 movie.mkv` on Windows or `cat movie.mkv.part* > movie.mkv` elsewhere. Restoring needs as much free space as the file itself; tgvault checks first.
+
+## Projects
+
+A project is stored as a **chain**: a full ZIP of the project, then a change ZIP for each later backup. A change ZIP holds only the files added or modified since the backup before it, plus `.tgvault-deleted.txt` listing the files that were deleted (and `.tgvault-change.txt`, which says in words which full backup and change it follows). Editing one file in a 500 MB project uploads that file, not 500 MB again.
+
+- A new full ZIP starts a new chain once the changes since the last one add up to more than a quarter of its size, after 7 days, or after 200 changes, so restoring never has a long chain to replay.
+- The current chain and the one before it are kept; older chains are deleted from Telegram.
+- Restoring or downloading any version rebuilds it from its chain and checks the result against a fingerprint of the project's file list at that moment; nothing is written if it doesn't match.
+- If a piece of a chain is deleted inside Telegram, the versions before it still work, and the project's next backup is a full ZIP.
+
+To rebuild a version by hand without tgvault: unzip the full ZIP (`project.zip`), then unzip each change ZIP over it in order (`project.change1.zip`, `project.change2.zip`, … up to the version you want; the number is also in each message's caption), and after each one delete the files listed in its `.tgvault-deleted.txt`.
 
 ## Limits (for now)
 

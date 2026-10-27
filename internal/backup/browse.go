@@ -68,17 +68,13 @@ func (e *Engine) SyncNew(ctx context.Context) (int, error) {
 		if _, err := e.st.Version(rf.MsgID); err == nil {
 			return nil // one of this device's own uploads
 		}
-		kind := store.KindFile
-		if in.Kind == "p" {
-			kind = store.KindProject
-		}
 		added++
-		return e.st.AddVersion(store.Version{MsgID: rf.MsgID, CloudPath: in.Path, Kind: kind, Size: in.Size,
-			Mtime: in.Mt, Hash: in.Hash, Fingerprint: in.FP, UploadedAt: int64(rf.Date)})
+		return e.st.AddVersion(versionFromCaption(rf.MsgID, rf.Date, in))
 	})
 	if err != nil {
 		return added, err
 	}
+	e.dropBrokenChanges()
 	_ = e.st.Set(settingSyncSeen, strconv.Itoa(newest))
 	if added > 0 {
 		log.Printf("sync: %d new file(s) from another device", added)
@@ -144,9 +140,9 @@ func (e *Engine) Search(q Query) ([]Entry, int, error) {
 		if v.Kind == store.KindProject {
 			kind = "project"
 		}
-		out = append(out, Entry{Name: name, Path: v.CloudPath, Kind: kind, Size: v.Size, Mtime: v.Mtime,
+		out = append(out, Entry{Name: name, Path: v.CloudPath, Kind: kind, Size: e.shownSize(v), Mtime: v.Mtime,
 			Versions: counts[v.CloudPath], Local: localState(v, byPath, e.Device()), MsgID: v.MsgID,
-			Uploaded: v.UploadedAt, Device: meta.DeviceOf(v.CloudPath), Type: typ, Parts: v.Parts})
+			Uploaded: v.UploadedAt, Device: meta.DeviceOf(v.CloudPath), Type: typ, Parts: v.Parts, Changes: v.Seq})
 	}
 	return out, total, nil
 }
@@ -169,6 +165,7 @@ func (e *Engine) MoveInCloud(ctx context.Context, prefixes []string, toFolder st
 		to string
 	}
 	var moves []move
+	moving := map[int]bool{}
 	for _, prefix := range prefixes {
 		if meta.DeviceOf(prefix) != meta.DeviceOf(toFolder) {
 			return 0, errors.New("files can't move between the PC's and the phone's parts of the backup")
@@ -187,6 +184,7 @@ func (e *Engine) MoveInCloud(ctx context.Context, prefixes []string, toFolder st
 				rel = strings.TrimPrefix(v.CloudPath, parent+"/")
 			}
 			moves = append(moves, move{v, toFolder + "/" + rel})
+			moving[v.MsgID] = true
 		}
 	}
 	if len(moves) == 0 {
@@ -198,7 +196,7 @@ func (e *Engine) MoveInCloud(ctx context.Context, prefixes []string, toFolder st
 		ctx := context.WithoutCancel(ctx)
 		for _, m := range moves {
 			t.update(func(t *Task) { t.Current = m.v.CloudPath })
-			err := e.moveVersion(ctx, m.v, m.to)
+			err := e.moveVersion(ctx, m.v, m.to, moving)
 			t.update(func(t *Task) {
 				t.Done++
 				if err != nil {
@@ -214,8 +212,10 @@ func (e *Engine) MoveInCloud(ctx context.Context, prefixes []string, toFolder st
 	return t.ID, nil
 }
 
-func (e *Engine) moveVersion(ctx context.Context, v store.Version, to string) error {
-	if existing, ok, _ := e.st.LatestVersion(to); ok && existing.MsgID != v.MsgID && existing.Hash != v.Hash {
+// moveVersion moves one version. moving holds every version being moved with
+// it (such as a file's older versions), which don't count as being in the way.
+func (e *Engine) moveVersion(ctx context.Context, v store.Version, to string, moving map[int]bool) error {
+	if existing, ok, _ := e.st.LatestVersion(to); ok && !moving[existing.MsgID] && existing.Hash != v.Hash {
 		return errors.New("a different file already has that name there; rename or remove it first")
 	}
 	if v.Parts > 0 {
@@ -224,12 +224,7 @@ func (e *Engine) moveVersion(ctx context.Context, v store.Version, to string) er
 		}
 		return e.st.MoveVersion(v.MsgID, to)
 	}
-	kind := "f"
-	if v.Kind == store.KindProject {
-		kind = "p"
-	}
-	caption, err := meta.Caption(meta.Info{Kind: kind, Path: to, Size: v.Size, Mt: v.Mtime, Hash: v.Hash,
-		FP: v.Fingerprint, Dev: meta.DeviceOf(to)})
+	caption, err := versionCaption(v, to)
 	if err != nil {
 		return err
 	}
@@ -254,6 +249,32 @@ func (e *Engine) Links(prefixes []string) ([]string, error) {
 				continue
 			}
 			seen[v.MsgID] = true
+			if v.IsChange() {
+				chain, err := e.chainPieces(v)
+				if err != nil {
+					return nil, err
+				}
+				for _, c := range chain {
+					parts, err := e.pieces(c)
+					if err != nil {
+						return nil, err
+					}
+					what := "full backup"
+					if c.IsChange() {
+						what = fmt.Sprintf("change %d", c.Seq)
+					}
+					for _, p := range parts {
+						if l := e.tg.MessageLink(p.MsgID); l != "" {
+							label := what
+							if len(parts) > 1 {
+								label += fmt.Sprintf(", part %d of %d", p.Index, len(parts))
+							}
+							out = append(out, fmt.Sprintf("%s (%s): %s", path.Base(v.CloudPath), label, l))
+						}
+					}
+				}
+				continue
+			}
 			parts, err := e.pieces(v)
 			if err != nil {
 				return nil, err

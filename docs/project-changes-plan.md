@@ -1,6 +1,6 @@
 # Projects: upload only what changed
 
-Status: proposed 2026-10-27, waiting for the owner's OK.
+Status: approved 2026-10-27 and implemented.
 
 This applies to every project tgvault backs up, on the PC and the phone.
 Nothing in it is specific to one project; the numbers below just use a real
@@ -70,13 +70,13 @@ normal project versions. Change ZIPs use a new kind (`"k": "d"`) with:
 | field | meaning |
 |---|---|
 | `b` | message ID of the chain's full ZIP |
-| `prev` | message ID of the previous piece (the full ZIP or the previous change) |
+| `pv` | message ID of the previous piece (the full ZIP or the previous change) |
 | `n` | position in the chain (1, 2, 3, …) |
-| `t` | SHA-256 of the whole project's file list after this change (path + file hash for every file), used to check a restore |
+| `tr` | SHA-256 of the whole project's file list after this change (path + file hash for every file), used to check a restore |
 | `fc`, `fd` | how many files changed and were deleted |
 
 Older builds accept only kinds `f` and `p`, so they ignore change ZIPs
-completely; they just see the last full ZIP. Full ZIPs also get `t`.
+completely; they just see the last full ZIP.
 
 The human-readable caption says e.g.
 `📦 Documents/myproject: 12 files changed, 1 deleted (change 4 after the full backup of 27 Oct)`.
@@ -118,7 +118,7 @@ describe this.
   made again shortly after; it takes seconds, so little is lost.
 - **A file changes while making a full ZIP:** as today (try again later).
 - **A piece of a chain is deleted inside Telegram:** versions after the gap
-  can't be restored, so they're shown as missing, versions before the gap
+  can't be restored, so they're taken off the list, versions before the gap
   still work, and the next backup is a full ZIP.
 - **Upload interrupted:** a change ZIP is small and simply uploaded again; a
   full ZIP resumes as uploads do today. The file list in `project_files` is
@@ -137,10 +137,10 @@ can list and restore every version without having seen the project itself.
 | action | with chains |
 |---|---|
 | Remove from backup | deletes every piece of every chain |
-| Move in backup | edits every piece's caption; rolled back on failure (as for big files) |
+| Move in backup | edits every piece's caption (pieces are linked by message ID, so a chain keeps working even if one edit fails and is retried) |
 | Copy Telegram links | one line per piece, in order, with a note on joining |
-| Cloud files | size shown is the project's size at the latest version, with "· 23 changes since full backup" |
-| Full ZIP over 2 GB | split into parts as today; a change ZIP over 2 GB is split the same way |
+| Cloud files | size shown is the chain's full ZIP, with "· 23 changes since its full backup" |
+| Full ZIP over 2 GB | split into parts as today; a change ZIP that would be over 2 GB is made as a full ZIP instead |
 
 ## Turning it on
 

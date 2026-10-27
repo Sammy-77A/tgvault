@@ -2,12 +2,10 @@
 package backup
 
 import (
-	"archive/zip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"io"
 	"log"
 	"os"
@@ -614,107 +612,16 @@ func (e *Engine) recordVersion(ctx context.Context, v store.Version, note string
 
 func (e *Engine) prune(ctx context.Context, cloudPath string) {
 	vs, err := e.st.Versions(cloudPath)
-	if err != nil || len(vs) <= keepVersions {
+	if err != nil || len(vs) == 0 {
 		return
 	}
-	var old []int
-	for _, v := range vs[keepVersions:] {
-		old = append(old, v.MsgID)
-	}
-	msgs, err := e.messageIDsOf(vs[keepVersions:])
-	if err != nil {
+	if vs[0].Kind == store.KindProject {
+		e.pruneChains(ctx, cloudPath, vs)
 		return
 	}
-	if err := e.tg.DeleteMessages(ctx, msgs); err != nil {
-		log.Printf("prune %s: %v (will retry later)", cloudPath, err)
-		return
+	if len(vs) > keepVersions {
+		e.deleteVersions(ctx, cloudPath, vs[keepVersions:])
 	}
-	_ = e.st.DeleteVersions(old)
-}
-
-func (e *Engine) uploadProject(ctx context.Context, it store.Item, abs string) outcome {
-	if fi, err := os.Stat(abs); errors.Is(err, os.ErrNotExist) || (err == nil && !fi.IsDir()) {
-		_ = e.st.MarkGone([]int64{it.ID})
-		return outcome{state: store.StateSynced}
-	}
-	files := projectFiles(abs)
-	fp, _, mtime := fingerprintOf(files)
-	if latest, ok, _ := e.st.LatestVersion(it.CloudPath); ok && latest.Fingerprint == fp {
-		return outcome{state: store.StateSynced}
-	}
-	if e.bigBusy(it.ID) {
-		return outcome{wait: time.Now().Add(bigWait)}
-	}
-	e.setProgress(Progress{ItemID: it.ID, CloudPath: it.CloudPath, Phase: "zipping"})
-	tmp := filepath.Join(e.tmpDir, fmt.Sprintf("project-%d.zip", it.ID))
-	defer os.Remove(tmp)
-	skipped, err := writeProjectZip(ctx, tmp, files)
-	if err != nil {
-		return e.failure(ctx, err)
-	}
-	if after, _, _ := projectFingerprint(abs); after != fp {
-		return outcome{state: store.StateFailed, retry: quietProject, note: "the project changed while zipping; will try again"}
-	}
-	fi, err := os.Stat(tmp)
-	if err != nil {
-		return e.failure(ctx, err)
-	}
-	note := ""
-	if skipped > 0 {
-		note = fmt.Sprintf("%d file(s) were open in another program and left out of this backup", skipped)
-	}
-	if splitAt, _ := e.splitLimits(it.CloudPath); fi.Size() > splitAt {
-		return e.uploadSplit(ctx, it, tmp, fi, store.Version{CloudPath: it.CloudPath, Kind: store.KindProject,
-			Mtime: mtime, Fingerprint: fp}, path.Base(it.CloudPath)+".zip", note)
-	}
-	hash, err := hashFile(tmp)
-	if err != nil {
-		return e.failure(ctx, err)
-	}
-	caption, err := meta.Caption(meta.Info{Kind: "p", Path: it.CloudPath, Size: fi.Size(), Mt: mtime, Hash: hash, FP: fp, Dev: e.Device()})
-	if err != nil {
-		return outcome{state: store.StateSkipped, note: err.Error()}
-	}
-	msgID, err := e.send(ctx, it, tmp, path.Base(it.CloudPath)+".zip", fi.Size(), hash, caption)
-	if err != nil {
-		return e.failure(ctx, err)
-	}
-	return e.recordVersion(ctx, store.Version{MsgID: msgID, CloudPath: it.CloudPath, Kind: store.KindProject,
-		Size: fi.Size(), Mtime: mtime, Hash: hash, Fingerprint: fp, UploadedAt: time.Now().Unix()}, note)
-}
-
-// writeProjectZip packs files into a ZIP. Files that can't be opened are
-// counted and left out rather than blocking the whole project.
-func writeProjectZip(ctx context.Context, dst string, files []projectFile) (skipped int, err error) {
-	out, err := os.Create(dst)
-	if err != nil {
-		return 0, err
-	}
-	defer out.Close()
-	zw := zip.NewWriter(out)
-	for _, f := range files {
-		if err := ctx.Err(); err != nil {
-			return 0, err
-		}
-		src, err := os.Open(f.abs)
-		if err != nil {
-			skipped++
-			continue
-		}
-		hdr := &zip.FileHeader{Name: f.rel, Method: zip.Deflate, Modified: time.Unix(f.mtime, 0)}
-		w, err := zw.CreateHeader(hdr)
-		if err == nil {
-			_, err = io.Copy(w, src)
-		}
-		src.Close()
-		if err != nil {
-			return 0, err
-		}
-	}
-	if err := zw.Close(); err != nil {
-		return 0, err
-	}
-	return skipped, out.Close()
 }
 
 // ---- status ----

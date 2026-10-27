@@ -374,7 +374,7 @@ func TestMoveSplitFileRollsBackOnFailure(t *testing.T) {
 	parts, _ := st.Parts(v.MsgID)
 
 	tg.editFails[parts[2].MsgID] = errors.New("MESSAGE_EDIT_TIME_EXPIRED")
-	if err := e.moveVersion(context.Background(), v, "Docs/Films/movie.mkv"); err == nil {
+	if err := e.moveVersion(context.Background(), v, "Docs/Films/movie.mkv", nil); err == nil {
 		t.Fatal("move should fail when a part can't be edited")
 	}
 	for _, p := range parts {
@@ -385,7 +385,7 @@ func TestMoveSplitFileRollsBackOnFailure(t *testing.T) {
 	}
 
 	delete(tg.editFails, parts[2].MsgID)
-	if err := e.moveVersion(context.Background(), v, "Docs/Films/movie.mkv"); err != nil {
+	if err := e.moveVersion(context.Background(), v, "Docs/Films/movie.mkv", nil); err != nil {
 		t.Fatal(err)
 	}
 	for _, p := range parts {

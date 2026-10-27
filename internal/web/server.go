@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"io/fs"
 	"log"
 	"net"
@@ -598,6 +599,28 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 	name := path.Base(v.CloudPath)
 	if v.Kind == store.KindProject {
 		name += ".zip"
+	}
+	if v.IsChange() {
+		// A project change is rebuilt into a whole ZIP before anything is
+		// sent, so a failure shows as an error, not an empty download.
+		tmp, err := s.eng.ProjectZip(r.Context(), v)
+		if err != nil {
+			fail(w, 502, tgclient.Friendly(err))
+			return
+		}
+		defer os.Remove(tmp)
+		f, err := os.Open(tmp)
+		if err != nil {
+			fail(w, 500, err.Error())
+			return
+		}
+		defer f.Close()
+		attachment(w, name)
+		if fi, err := f.Stat(); err == nil {
+			w.Header().Set("Content-Length", strconv.FormatInt(fi.Size(), 10))
+		}
+		_, _ = io.Copy(w, f)
+		return
 	}
 	attachment(w, name)
 	w.Header().Set("Content-Length", strconv.FormatInt(v.Size, 10))

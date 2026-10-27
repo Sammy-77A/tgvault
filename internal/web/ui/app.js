@@ -573,7 +573,7 @@ function cloudRow(e) {
   const folder = e.path.includes("/") ? e.path.slice(0, e.path.lastIndexOf("/")) : "";
   const sub = isFolder
     ? `${e.files} item${e.files > 1 ? "s" : ""} · ${bytes(e.size)}`
-    : `${bytes(e.size)} · modified ${when(e.mtime)}${e.versions > 1 ? ` · ${e.versions} versions` : ""}${e.parts ? ` · stored in ${e.parts} parts` : ""}${e.kind === "project" ? " · project ZIP" : ""}`;
+    : `${bytes(e.size)} · modified ${when(e.mtime)}${e.versions > 1 ? ` · ${e.versions} versions` : ""}${e.parts ? ` · stored in ${e.parts} parts` : ""}${e.kind === "project" ? " · project ZIP" : ""}${e.changes ? ` · ${plural(e.changes, "change")} since its full backup` : ""}`;
   const box = pickBox(cloud, e, e.name);
   // Download and Restore act on the whole selection when this item is part of it.
   const targets = () => (cloud.selected.has(e.path) && cloud.selected.size > 1 ? [...cloud.selected.values()] : [e]);
@@ -979,13 +979,26 @@ async function removeFromBackup(entries) {
   });
 }
 
+function plural(n, word) {
+  return `${n.toLocaleString()} ${word}${n === 1 ? "" : "s"}`;
+}
+
+// What a stored version holds: its size, or for a project change only what
+// changed since the version before it.
+function versionWhat(v) {
+  if (!v.seq) return v.kind === "project" ? `${bytes(v.size)} · full backup` : bytes(v.size);
+  const parts = [`${plural(v.changed || 0, "file")} changed`];
+  if (v.deleted) parts.push(`${plural(v.deleted, "file")} deleted`);
+  return `${parts.join(", ")} (${bytes(v.size)})`;
+}
+
 async function showVersions(entry) {
   let vs;
   try { vs = await api(`/api/versions?path=${encodeURIComponent(entry.path)}`); } catch (err) { toast(err.message); return; }
   const body = el("ul", { class: "list" }, vs.map((v, i) => el("li", {},
     el("div", { class: "grow" },
       el("div", { class: "name" }, i === 0 ? "Latest" : `Older version ${i}`),
-      el("div", { class: "sub" }, `${bytes(v.size)} · backed up ${when(v.uploadedAt)}${v.parts ? ` · ${v.parts} parts` : ""}`)),
+      el("div", { class: "sub" }, `${versionWhat(v)} · backed up ${when(v.uploadedAt)}${v.parts ? ` · ${v.parts} parts` : ""}`)),
     onPhone ? null : el("a", { class: "btn small", href: `/api/download?msg=${v.msgId}` }, "Download"))));
   await dialog({ title: entry.name, body, buttons: [{ label: "Close", value: null }] });
 }

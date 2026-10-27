@@ -188,3 +188,32 @@ func TestSplitPartSizeFitsTelegram(t *testing.T) {
 		t.Fatalf("SplitPartSize %d must be whole 512 KiB pieces under Telegram's limit", SplitPartSize)
 	}
 }
+
+func TestChangeCaption(t *testing.T) {
+	in := Info{Kind: "d", Path: "Documents/shop", Size: 900, Mt: 1700000000, Hash: strings.Repeat("c", 64), FP: "fp",
+		Base: 10, Prev: 12, Seq: 2, Tree: strings.Repeat("d", 64), Changed: 3, Deleted: 1}
+	c, err := Caption(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(c, "📦 Documents/shop (change 2 after the full backup: 3 files changed, 1 file deleted)\n#Documents #shop\n") {
+		t.Fatalf("unexpected caption:\n%s", c)
+	}
+	got, ok := Parse(c)
+	in.V = 1
+	if !ok || got != in {
+		t.Fatalf("got %+v %v, want %+v", got, ok, in)
+	}
+	// A change ZIP missing its links is not accepted.
+	for _, bad := range []Info{
+		{Kind: "d", Path: "a", Prev: 1, Seq: 1, Tree: "t"},
+		{Kind: "d", Path: "a", Base: 1, Seq: 1, Tree: "t"},
+		{Kind: "d", Path: "a", Base: 1, Prev: 1, Tree: "t"},
+		{Kind: "d", Path: "a", Base: 1, Prev: 1, Seq: 1},
+	} {
+		c, _ := Caption(bad)
+		if _, ok := Parse(c); ok {
+			t.Fatalf("accepted %+v", bad)
+		}
+	}
+}

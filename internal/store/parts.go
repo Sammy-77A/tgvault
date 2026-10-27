@@ -47,8 +47,7 @@ func (s *Store) AddSplitVersion(v Version, parts []Part) error {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`INSERT OR REPLACE INTO versions(`+versionCols+`) VALUES(?,?,?,?,?,?,?,?)`,
-		v.MsgID, v.CloudPath, v.Kind, v.Size, v.Mtime, v.Hash, v.Fingerprint, v.UploadedAt); err != nil {
+	if _, err := tx.Exec(`INSERT OR REPLACE INTO versions(`+versionCols+`) VALUES(`+versionMarks+`)`, versionArgs(v)...); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`DELETE FROM parts WHERE version_id=?`, v.MsgID); err != nil {

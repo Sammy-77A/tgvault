@@ -106,12 +106,15 @@ func Open(path string) (*Store, error) {
 	}
 	// SQLite allows one writer; a single connection avoids "database is locked".
 	db.SetMaxOpenConns(1)
-	if _, err := db.Exec(schema + partsSchema); err != nil {
+	if _, err := db.Exec(schema + partsSchema + chainsSchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("create schema: %w", err)
 	}
 	// Columns added after 0.1; the error just means the column already exists.
 	_, _ = db.Exec(`ALTER TABLE items ADD COLUMN failing_since INTEGER NOT NULL DEFAULT 0`)
+	for _, q := range chainColumns {
+		_, _ = db.Exec(q)
+	}
 	return &Store{db: db}, nil
 }
 
@@ -587,9 +590,36 @@ type Version struct {
 	Fingerprint string `json:"-"`
 	UploadedAt  int64  `json:"uploadedAt"`
 	Parts       int    `json:"parts,omitempty"` // messages it's split into; 0 for one message
+
+	// Project change ZIPs (see chains.go); all zero for anything else.
+	Base    int    `json:"base,omitempty"` // the chain's full ZIP
+	Prev    int    `json:"-"`              // the piece before this one
+	Seq     int    `json:"seq,omitempty"`  // 1, 2, 3, ... after the full ZIP
+	Tree    string `json:"-"`              // sha256 of the project's file list after this change
+	Changed int    `json:"changed,omitempty"`
+	Deleted int    `json:"deleted,omitempty"`
 }
 
-const versionCols = `msg_id,cloud_path,kind,size,mtime,hash,fingerprint,uploaded_at`
+// IsChange reports whether v is a project change ZIP.
+func (v Version) IsChange() bool { return v.Seq > 0 }
+
+// ChainID identifies the chain a project version belongs to: its full ZIP.
+func (v Version) ChainID() int {
+	if v.IsChange() {
+		return v.Base
+	}
+	return v.MsgID
+}
+
+const versionCols = `msg_id,cloud_path,kind,size,mtime,hash,fingerprint,uploaded_at,base,prev,seq,tree,changed,deleted`
+
+// versionArgs are v's values in versionCols order.
+func versionArgs(v Version) []any {
+	return []any{v.MsgID, v.CloudPath, v.Kind, v.Size, v.Mtime, v.Hash, v.Fingerprint, v.UploadedAt,
+		v.Base, v.Prev, v.Seq, v.Tree, v.Changed, v.Deleted}
+}
+
+const versionMarks = `?,?,?,?,?,?,?,?,?,?,?,?,?,?`
 
 func (s *Store) queryVersions(q string, args ...any) ([]Version, error) {
 	rows, err := s.db.Query(`SELECT `+versionCols+`,(SELECT COUNT(*) FROM parts WHERE parts.version_id=versions.msg_id) FROM versions `+q, args...)
@@ -600,7 +630,8 @@ func (s *Store) queryVersions(q string, args ...any) ([]Version, error) {
 	var out []Version
 	for rows.Next() {
 		var v Version
-		if err := rows.Scan(&v.MsgID, &v.CloudPath, &v.Kind, &v.Size, &v.Mtime, &v.Hash, &v.Fingerprint, &v.UploadedAt, &v.Parts); err != nil {
+		if err := rows.Scan(&v.MsgID, &v.CloudPath, &v.Kind, &v.Size, &v.Mtime, &v.Hash, &v.Fingerprint, &v.UploadedAt,
+			&v.Base, &v.Prev, &v.Seq, &v.Tree, &v.Changed, &v.Deleted, &v.Parts); err != nil {
 			return nil, err
 		}
 		out = append(out, v)
@@ -610,8 +641,7 @@ func (s *Store) queryVersions(q string, args ...any) ([]Version, error) {
 
 // AddVersion records an uploaded version.
 func (s *Store) AddVersion(v Version) error {
-	_, err := s.db.Exec(`INSERT OR REPLACE INTO versions(`+versionCols+`) VALUES(?,?,?,?,?,?,?,?)`,
-		v.MsgID, v.CloudPath, v.Kind, v.Size, v.Mtime, v.Hash, v.Fingerprint, v.UploadedAt)
+	_, err := s.db.Exec(`INSERT OR REPLACE INTO versions(`+versionCols+`) VALUES(`+versionMarks+`)`, versionArgs(v)...)
 	return err
 }
 
@@ -748,7 +778,8 @@ func (s *Store) AllVersionIDs() (map[int]bool, error) {
 
 // ClearCloud forgets all cloud versions and resume state (used on logout).
 func (s *Store) ClearCloud() error {
-	for _, q := range []string{`DELETE FROM versions`, `DELETE FROM parts`, `DELETE FROM part_uploads`, `DELETE FROM resumes`, `UPDATE items SET state='pending', attempts=0, next_attempt=0 WHERE state!='skipped'`} {
+	for _, q := range []string{`DELETE FROM versions`, `DELETE FROM parts`, `DELETE FROM part_uploads`, `DELETE FROM resumes`,
+		`DELETE FROM project_files`, `DELETE FROM project_state`, `UPDATE items SET state='pending', attempts=0, next_attempt=0 WHERE state!='skipped'`} {
 		if _, err := s.db.Exec(q); err != nil {
 			return err
 		}

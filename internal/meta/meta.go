@@ -28,7 +28,7 @@ const marker = "tgvault:"
 // whole file list from Telegram alone.
 type Info struct {
 	V    int    `json:"v"`
-	Kind string `json:"k"`           // "f" file, "p" project ZIP
+	Kind string `json:"k"`           // "f" file, "p" project ZIP, "d" project change ZIP
 	Path string `json:"p"`           // cloud path, e.g. "Documents/Notes/a.txt"
 	Size int64  `json:"s"`           // size of the uploaded bytes
 	Mt   int64  `json:"m"`           // local modification time (unix seconds)
@@ -45,10 +45,23 @@ type Info struct {
 	PartSize  int64  `json:"ps,omitempty"`  // this part's size
 	PartHash  string `json:"ph,omitempty"`  // sha256 of this part
 	EarlierID string `json:"ids,omitempty"` // on the last part: message IDs of the earlier parts, comma-separated
+
+	// Set on a project change ZIP (kind "d"): only the files changed since
+	// the previous backup of the project. Size and Hash above describe the
+	// change ZIP itself.
+	Base    int    `json:"b,omitempty"`  // message ID of the full ZIP the changes apply to
+	Prev    int    `json:"pv,omitempty"` // message ID of the previous piece (the full ZIP or the previous change)
+	Seq     int    `json:"n,omitempty"`  // position after the full ZIP: 1, 2, 3, ...
+	Tree    string `json:"tr,omitempty"` // sha256 of the project's file list after this change
+	Changed int    `json:"fc,omitempty"` // files added or modified
+	Deleted int    `json:"fd,omitempty"` // files deleted
 }
 
 // Split reports whether the caption belongs to one part of a split file.
 func (in Info) Split() bool { return in.Parts > 0 }
+
+// Change reports whether the caption belongs to a project change ZIP.
+func (in Info) Change() bool { return in.Kind == "d" }
 
 // Device names. The PC's backups keep their original paths ("Documents/…");
 // every other device's backups live under a folder named after it ("Phone/…").
@@ -91,14 +104,18 @@ func Caption(in Info) (string, error) {
 		return "", errors.New("the file path is too long to store in Telegram (over about 900 characters)")
 	}
 	icon := "📄 "
-	if in.Kind == "p" {
+	if in.Kind != "f" {
 		icon = "📦 "
 	}
 	human := icon + in.Path
 	if in.Split() {
 		human += fmt.Sprintf(" (part %d of %d)", in.Part, in.Parts)
 	}
-	tags := Hashtags(in.Path, in.Kind == "p")
+	if in.Change() {
+		human += fmt.Sprintf(" (change %d after the full backup: %s changed, %s deleted)",
+			in.Seq, plural(in.Changed, "file"), plural(in.Deleted, "file"))
+	}
+	tags := Hashtags(in.Path, in.Kind != "f")
 	caption := human + "\n" + tags + "\n" + machine
 	if len(caption) <= MaxCaption {
 		return caption, nil
@@ -120,10 +137,15 @@ func Parse(caption string) (Info, bool) {
 		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, marker)), &in); err != nil {
 			return Info{}, false
 		}
-		if in.Path == "" || (in.Kind != "f" && in.Kind != "p") {
+		if in.Path == "" || (in.Kind != "f" && in.Kind != "p" && in.Kind != "d") {
 			return Info{}, false
 		}
 		switch {
+		case in.Change():
+			// Kind "d" is new, so older builds skip change ZIPs; never split.
+			if in.V != 1 || in.Split() || in.Base <= 0 || in.Prev <= 0 || in.Seq < 1 || in.Tree == "" {
+				return Info{}, false
+			}
 		case in.V == 1 && !in.Split():
 		case in.V == 2 && in.Parts >= 2 && in.Part >= 1 && in.Part <= in.Parts && in.Group != "" &&
 			in.PartOff >= 0 && in.PartSize > 0 && in.PartOff+in.PartSize <= in.Size && in.PartHash != "":
@@ -133,6 +155,13 @@ func Parse(caption string) (Info, bool) {
 		return in, true
 	}
 	return Info{}, false
+}
+
+func plural(n int, word string) string {
+	if n == 1 {
+		return "1 " + word
+	}
+	return fmt.Sprintf("%d %ss", n, word)
 }
 
 // Hashtags turns each folder of a cloud path into a Telegram hashtag, so the

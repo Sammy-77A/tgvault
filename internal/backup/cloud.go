@@ -94,6 +94,7 @@ func (e *Engine) reconcileOnce(ctx context.Context) (int, error) {
 	seen := map[int]bool{}
 	paths := map[string]bool{}
 	groups := map[string][]partMsg{} // parts of split files, by upload
+	bases := map[int]bool{}          // messages change ZIPs build on
 	newest := 0
 	err = e.tg.ScanChannel(ctx, func(rf tgclient.RemoteFile) error {
 		newest = max(newest, rf.MsgID)
@@ -105,24 +106,22 @@ func (e *Engine) reconcileOnce(ctx context.Context) (int, error) {
 			groups[in.Group] = append(groups[in.Group], partMsg{rf, in})
 			return nil
 		}
+		if in.Change() {
+			bases[in.Base] = true
+		}
 		seen[rf.MsgID] = true
 		paths[in.Path] = true
 		if known[rf.MsgID] {
 			return nil
 		}
-		kind := store.KindFile
-		if in.Kind == "p" {
-			kind = store.KindProject
-		}
-		return e.st.AddVersion(store.Version{MsgID: rf.MsgID, CloudPath: in.Path, Kind: kind, Size: in.Size,
-			Mtime: in.Mt, Hash: in.Hash, Fingerprint: in.FP, UploadedAt: int64(rf.Date)})
+		return e.st.AddVersion(versionFromCaption(rf.MsgID, rf.Date, in))
 	})
 	if err != nil {
 		// An incomplete scan must never be read as "files were deleted".
 		return 0, err
 	}
 	// A split file counts only when every part is there.
-	split, err := e.reconcileGroups(ctx, groups, paths, known)
+	split, err := e.reconcileGroups(ctx, groups, paths, known, bases)
 	if err != nil {
 		return 0, err
 	}
@@ -141,6 +140,7 @@ func (e *Engine) reconcileOnce(ctx context.Context) (int, error) {
 			return 0, err
 		}
 	}
+	e.dropBrokenChanges()
 	if newest > 0 {
 		_ = e.st.Set(settingSyncSeen, strconv.Itoa(newest))
 	}
@@ -170,7 +170,19 @@ type Entry struct {
 	Type     string `json:"type,omitempty"` // audio, video, image, document, archive, other
 	MsgID    int    `json:"msgId,omitempty"`
 	Uploaded int64  `json:"uploaded,omitempty"`
-	Parts    int    `json:"parts,omitempty"` // messages a file over 2 GB is split into
+	Parts    int    `json:"parts,omitempty"`   // messages a file over 2 GB is split into
+	Changes  int    `json:"changes,omitempty"` // project: change ZIPs since its last full backup
+}
+
+// shownSize is the size shown for a version: for a project change, the size
+// of its full backup, which is about what the project takes.
+func (e *Engine) shownSize(v store.Version) int64 {
+	if v.IsChange() {
+		if base, err := e.st.Version(v.Base); err == nil {
+			return base.Size
+		}
+	}
+	return v.Size
 }
 
 // List returns the children of a cloud folder ("" = top level).
@@ -211,7 +223,7 @@ func (e *Engine) List(prefix string) ([]Entry, error) {
 				folders[name] = f
 			}
 			f.Files++
-			f.Size += v.Size
+			f.Size += e.shownSize(v)
 			if f.Local != local {
 				f.Local = "mixed"
 			}
@@ -221,9 +233,9 @@ func (e *Engine) List(prefix string) ([]Entry, error) {
 		if v.Kind == store.KindProject {
 			kind = "project"
 		}
-		out = append(out, Entry{Name: rest, Path: v.CloudPath, Kind: kind, Size: v.Size, Mtime: v.Mtime,
+		out = append(out, Entry{Name: rest, Path: v.CloudPath, Kind: kind, Size: e.shownSize(v), Mtime: v.Mtime,
 			Versions: counts[v.CloudPath], Local: local, MsgID: v.MsgID, Uploaded: v.UploadedAt,
-			Device: meta.DeviceOf(v.CloudPath), Type: meta.FileType(rest), Parts: v.Parts})
+			Device: meta.DeviceOf(v.CloudPath), Type: meta.FileType(rest), Parts: v.Parts, Changes: v.Seq})
 	}
 	for _, f := range folders {
 		out = append(out, *f)
@@ -515,7 +527,7 @@ func (e *Engine) restoreFile(ctx context.Context, v store.Version, target string
 }
 
 func (e *Engine) restoreProject(ctx context.Context, v store.Version, targetDir string) (string, error) {
-	tmp, err := e.downloadVerified(ctx, v, e.tmpDir)
+	tmp, err := e.projectZipFile(ctx, v)
 	if err != nil {
 		return "", err
 	}
@@ -616,6 +628,9 @@ func (e *Engine) Version(msgID int) (store.Version, error) { return e.st.Version
 // fails its check, it returns an error partway; the caller must then abandon
 // w so the half-written file isn't kept.
 func (e *Engine) DownloadTo(ctx context.Context, v store.Version, w io.Writer) error {
+	if v.IsChange() {
+		return errors.New("a project change must be rebuilt first (ProjectZip)")
+	}
 	return e.streamVersion(ctx, v, w)
 }
 
@@ -672,7 +687,7 @@ func (e *Engine) WriteZipMany(ctx context.Context, prefixes []string, w io.Write
 }
 
 func (e *Engine) zipProject(ctx context.Context, zw *zip.Writer, v store.Version, rel string) error {
-	tmp, err := e.downloadVerified(ctx, v, e.tmpDir)
+	tmp, err := e.projectZipFile(ctx, v)
 	if err != nil {
 		return fmt.Errorf("%s: %w", v.CloudPath, err)
 	}

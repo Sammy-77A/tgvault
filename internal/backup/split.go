@@ -338,21 +338,28 @@ func (e *Engine) checkInTelegram(ctx context.Context, vs []store.Version) (map[i
 	}
 	wants := map[int]want{}
 	var ids []int
+	problems := map[int]string{}
 	for _, v := range vs {
-		ps, err := e.pieces(v)
+		chain, err := e.chainPieces(v)
 		if err != nil {
-			return nil, err
+			problems[v.MsgID] = "an earlier piece of its backup is missing"
+			continue
 		}
-		for _, p := range ps {
-			wants[p.MsgID] = want{v.MsgID, p.Size}
-			ids = append(ids, p.MsgID)
+		for _, c := range chain {
+			ps, err := e.pieces(c)
+			if err != nil {
+				return nil, err
+			}
+			for _, p := range ps {
+				wants[p.MsgID] = want{v.MsgID, p.Size}
+				ids = append(ids, p.MsgID)
+			}
 		}
 	}
 	remote, err := e.tg.Exists(ctx, ids)
 	if err != nil {
 		return nil, err
 	}
-	problems := map[int]string{}
 	for _, id := range ids {
 		w := wants[id]
 		rf, ok := remote[id]
@@ -636,12 +643,15 @@ func (e *Engine) addSplitFromLastPart(ctx context.Context, last tgclient.RemoteF
 
 // reconcileGroups records the complete split files found by a full check and
 // cleans up parts that can never be used. It returns the version IDs found.
-func (e *Engine) reconcileGroups(ctx context.Context, groups map[string][]partMsg, paths map[string]bool, known map[int]bool) (map[int]bool, error) {
+// bases are messages that project change ZIPs name as their full ZIP: when a
+// part was posted twice, the copy they name is the one kept.
+func (e *Engine) reconcileGroups(ctx context.Context, groups map[string][]partMsg, paths map[string]bool, known, bases map[int]bool) (map[int]bool, error) {
 	pending, err := e.st.PartUploadIDs()
 	if err != nil {
 		return nil, err
 	}
-	prefer := e.ownsMessage(pending)
+	owns := e.ownsMessage(pending)
+	prefer := func(id int) bool { return bases[id] || owns(id) }
 	seen := map[int]bool{}
 	var junk []int
 	cutoff := time.Now().Add(-orphanAge).Unix()
