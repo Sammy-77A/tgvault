@@ -9,6 +9,9 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.view.View
+import android.view.ViewGroup
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -25,6 +28,9 @@ class MainActivity : Activity() {
     private lateinit var web: WebView
     private lateinit var swipe: SwipeRefreshLayout
     private var started = false
+    private var fullScreen: View? = null // a video playing full screen
+    private var fullScreenDone: WebChromeClient.CustomViewCallback? = null
+    private lateinit var chrome: WebChromeClient
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -45,6 +51,33 @@ class MainActivity : Activity() {
                 }
             }
         }
+        // A previewed video's full-screen button hands the player over here.
+        chrome = object : WebChromeClient() {
+            override fun onShowCustomView(view: View, callback: CustomViewCallback) {
+                if (fullScreen != null) {
+                    callback.onCustomViewHidden()
+                    return
+                }
+                fullScreen = view
+                fullScreenDone = callback
+                (window.decorView as ViewGroup).addView(view, ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+                @Suppress("DEPRECATION")
+                window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN or
+                    View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+            }
+
+            override fun onHideCustomView() {
+                val view = fullScreen ?: return
+                (window.decorView as ViewGroup).removeView(view)
+                @Suppress("DEPRECATION")
+                window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
+                fullScreen = null
+                fullScreenDone?.onCustomViewHidden()
+                fullScreenDone = null
+            }
+        }
+        web.webChromeClient = chrome
         // Downloads are saved by tgvault itself into Download/tgvault; a plain
         // browser download would silently do nothing in this view.
         web.setDownloadListener { _, _, _, _, _ ->
@@ -178,6 +211,16 @@ class MainActivity : Activity() {
 
     @Deprecated("Back button for the page's own history")
     override fun onBackPressed() {
-        if (web.canGoBack()) web.goBack() else super.onBackPressed()
+        when {
+            fullScreen != null -> chrome.onHideCustomView()
+            // The page closes an open preview (or dialog) first.
+            started -> web.evaluateJavascript("window.tgvaultBack ? window.tgvaultBack() : false") { handled ->
+                if (handled != "true") {
+                    if (web.canGoBack()) web.goBack() else finish()
+                }
+            }
+            web.canGoBack() -> web.goBack()
+            else -> super.onBackPressed()
+        }
     }
 }

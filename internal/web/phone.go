@@ -19,6 +19,7 @@ type Phone struct {
 	FileChanged func(path string)
 	ShareDir    string               // files are copied here before sharing
 	Share       func(paths []string) // opens Android's share sheet
+	Open        func(path string)    // opens a file in another app ("Open with…")
 
 	mu    sync.Mutex
 	perms PhonePermissions

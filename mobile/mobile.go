@@ -31,6 +31,8 @@ type Host interface {
 	FileChanged(path string)
 	// ShareFiles opens Android's share sheet for files, one path per line.
 	ShareFiles(paths string)
+	// OpenFile lets the user pick another app to open a file with.
+	OpenFile(path string)
 }
 
 var (
@@ -71,7 +73,7 @@ func Start(dataDir, storageRoot string, host Host) (string, error) {
 	a, err := app.Start(context.Background(), app.Options{
 		DataDir: dataDir, Listener: l, Token: hex.EncodeToString(buf), Version: Version,
 		Phone: &app.PhoneOptions{StorageRoot: storageRoot, FileChanged: host.FileChanged, Notify: host.ShowNotification,
-			Share: func(paths []string) { host.ShareFiles(strings.Join(paths, "\n")) }},
+			Share: func(paths []string) { host.ShareFiles(strings.Join(paths, "\n")) }, Open: host.OpenFile},
 	})
 	if err != nil {
 		l.Close()

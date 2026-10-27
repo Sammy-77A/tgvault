@@ -499,6 +499,7 @@ const cloud = {
   list: "cloudList",
   key: (e) => e.path,
   open: (e) => { if (e.kind !== "folder") return false; openCloud(e.path); return true; },
+  view: (e) => { if (e.kind === "file") openViewer(e); },
   render: () => renderSelection(),
 };
 
@@ -578,11 +579,15 @@ function cloudRow(e) {
   // Download and Restore act on the whole selection when this item is part of it.
   const targets = () => (cloud.selected.has(e.path) && cloud.selected.size > 1 ? [...cloud.selected.values()] : [e]);
   const actions = isFolder ? [] : [
+    e.kind === "file" ? el("button", { class: "small", onclick: (ev) => { ev.stopPropagation(); openViewer(e); } }, "View") : null,
     el("button", { class: "small", "data-label": "Download", onclick: (ev) => { ev.stopPropagation(); bulkDownload(targets()); } }, "Download"),
     el("button", { class: "small", "data-label": "Restore", onclick: (ev) => { ev.stopPropagation(); restore(targets()); } }, "Restore"),
     e.versions > 1 ? el("button", { class: "small", onclick: (ev) => { ev.stopPropagation(); showVersions(e); } }, "Versions") : null,
   ];
-  return el("li", pickRow(cloud, e, { class: isFolder ? "clickable" : "" }),
+  return el("li", pickRow(cloud, e, {
+    class: isFolder ? "clickable" : "",
+    ondblclick: (ev) => { if (e.kind === "file" && !ev.target.closest("button, input, a")) openViewer(e); },
+  }),
     box,
     el("span", { class: "icon" }, icon),
     el("div", { class: "grow" },
@@ -698,8 +703,8 @@ function listKeys(p, ev) {
   } else if (ev.key === " ") {
     ev.preventDefault();
     toggleOne(p, x);
-  } else if (ev.key === "Enter" && p.open) {
-    p.open(x);
+  } else if (ev.key === "Enter") {
+    if (!(p.open && p.open(x)) && p.view) p.view(x);
   }
 }
 
@@ -999,9 +1004,188 @@ async function showVersions(entry) {
     el("div", { class: "grow" },
       el("div", { class: "name" }, i === 0 ? "Latest" : `Older version ${i}`),
       el("div", { class: "sub" }, `${versionWhat(v)} · backed up ${when(v.uploadedAt)}${v.parts ? ` · ${v.parts} parts` : ""}`)),
+    entry.kind === "file" ? el("button", { type: "button", class: "small", onclick: () => {
+      $("dlg").close();
+      openViewer({ ...entry, size: v.size, mtime: v.mtime, parts: v.parts }, [entry], i === 0 ? 0 : v.msgId);
+    } }, "View") : null,
     onPhone ? null : el("a", { class: "btn small", href: `/api/download?msg=${v.msgId}` }, "Download"))));
   await dialog({ title: entry.name, body, buttons: [{ label: "Close", value: null }] });
 }
+
+// ---------- previews ----------
+
+// What the viewer can show, by file extension. Everything else gets an
+// information card with Download (and Open with… on the phone).
+const viewExts = {
+  image: ["jpg", "jpeg", "png", "gif", "webp", "bmp", "ico", "avif", "svg"],
+  video: ["mp4", "m4v", "mov", "webm", "mkv", "3gp", "ogv"],
+  audio: ["mp3", "m4a", "aac", "ogg", "oga", "opus", "wav", "flac", "weba"],
+  pdf: ["pdf"],
+  text: ["txt", "md", "log", "csv", "tsv", "json", "xml", "html", "htm", "css", "js", "mjs", "ts", "tsx", "jsx",
+    "go", "py", "java", "kt", "c", "h", "cpp", "cs", "rb", "php", "rs", "sh", "bat", "ps1", "yml", "yaml",
+    "toml", "ini", "cfg", "conf", "sql", "srt", "vtt", "env", "gitignore"],
+};
+const textLimit = 512 * 1024;
+
+function viewKind(name) {
+  const i = name.lastIndexOf(".");
+  const ext = (i >= 0 ? name.slice(i + 1) : name).toLowerCase();
+  for (const [kind, exts] of Object.entries(viewExts)) if (exts.includes(ext)) return kind;
+  return "other";
+}
+
+// The open viewer: the files it steps through (in the order shown), which
+// one is showing, and for an older version its message ID.
+const viewer = { list: [], i: 0, msgId: 0 };
+
+// openViewer shows a file; ← → (or a swipe) move through list.
+function openViewer(entry, list = cloud.order.filter((x) => x.kind === "file"), msgId = 0) {
+  viewer.list = list.length ? list : [entry];
+  viewer.i = Math.max(0, viewer.list.findIndex((x) => x.path === entry.path));
+  viewer.msgId = msgId;
+  closeMenu();
+  renderViewer();
+}
+
+function closeViewer() {
+  const v = $("viewer");
+  if (!v) return false;
+  for (const m of v.querySelectorAll("video, audio")) { m.pause(); m.removeAttribute("src"); m.load(); }
+  v.remove();
+  document.body.classList.remove("viewing");
+  return true;
+}
+
+function stepViewer(d) {
+  const i = viewer.i + d;
+  if (viewer.msgId || i < 0 || i >= viewer.list.length) return;
+  viewer.i = i;
+  viewer.msgId = 0;
+  renderViewer();
+}
+
+function renderViewer() {
+  const keepFocus = $("viewer") && $("viewer").contains(document.activeElement);
+  closeViewer();
+  const e = viewer.list[viewer.i];
+  const msgId = viewer.msgId || e.msgId;
+  const src = `/api/preview?msg=${msgId}`;
+  const kind = viewKind(e.name);
+  const info = `${bytes(e.size)} · modified ${when(e.mtime)}${viewer.msgId ? " · older version" : ""}${e.parts ? ` · stored in ${e.parts} parts` : ""}`;
+  const canStep = !viewer.msgId && viewer.list.length > 1;
+  const download = onPhone
+    ? el("button", { type: "button", class: "small", onclick: () => bulkDownload([e]) }, "Download")
+    : el("a", { class: "btn small", href: `/api/download?msg=${msgId}` }, "Download");
+  const openWith = onPhone ? el("button", { type: "button", class: "small", onclick: () => openWithApp(e) }, "Open with…") : null;
+  const body = el("div", { class: "vbody" }, viewContent(e, kind, src, msgId));
+  const box = el("div", { class: "viewer", id: "viewer", role: "dialog", "aria-modal": "true", "aria-label": `Preview of ${e.name}`, tabindex: "-1" },
+    el("div", { class: "vbar" },
+      el("div", { class: "vtitle" }, el("div", { class: "name" }, e.name),
+        el("div", { class: "sub" }, info, canStep ? ` · ${viewer.i + 1} of ${viewer.list.length}` : "")),
+      el("div", { class: "vactions" }, download, openWith,
+        el("button", { type: "button", class: "small", "aria-label": "Close preview", onclick: closeViewer }, "Close"))),
+    body,
+    canStep ? el("button", { type: "button", class: "vnav prev", "aria-label": "Previous file", disabled: viewer.i === 0, onclick: () => stepViewer(-1) }, "‹") : null,
+    canStep ? el("button", { type: "button", class: "vnav next", "aria-label": "Next file", disabled: viewer.i === viewer.list.length - 1, onclick: () => stepViewer(1) }, "›") : null);
+  swipeToStep(body);
+  document.body.append(box);
+  document.body.classList.add("viewing");
+  if (!keepFocus || !box.contains(document.activeElement)) box.focus();
+}
+
+function viewContent(e, kind, src, msgId) {
+  const card = (why) => el("div", { class: "vcard" },
+    el("div", { class: "vicon" }, typeIcons[e.type] || "📄"),
+    el("p", {}, why),
+    el("p", { class: "hint" }, onPhone ? "Download saves it to Download/tgvault; Open with… lets another app show it." : "Download saves it to this PC."));
+  if (kind === "image") {
+    const img = el("img", { src, alt: e.name, class: "fit" });
+    img.addEventListener("click", () => img.classList.toggle("fit"));
+    img.addEventListener("error", () => img.replaceWith(card("This picture can't be shown here (it may be in a format the browser doesn't read).")));
+    return img;
+  }
+  if (kind === "video" || kind === "audio") {
+    // On the phone nothing is fetched until you press play.
+    const media = el(kind, { src, controls: true, preload: onPhone ? "none" : "metadata", playsinline: true });
+    media.addEventListener("error", () => media.replaceWith(card(`This ${kind === "video" ? "video" : "recording"} can't play here: its format isn't supported by ${onPhone ? "this phone" : "this browser"}.`)));
+    if (kind === "video") {
+      // Some videos (often x265/HEVC) play their sound but no picture here.
+      media.addEventListener("loadedmetadata", () => {
+        if (!media.videoWidth && media.parentNode) {
+          const wrap = el("div", { class: "vvideo" }, el("p", { class: "vwarn" },
+            `This video's picture can't be shown here (its format isn't supported by ${onPhone ? "this phone" : "this browser"}); the sound may still play. ${onPhone ? "Open with… lets a video app play it." : "Download it to watch it in a video player."}`));
+          media.replaceWith(wrap);
+          wrap.append(media);
+        }
+      });
+    }
+    return kind === "audio" ? el("div", { class: "vaudio" }, el("div", { class: "vicon" }, "🎵"), media) : media;
+  }
+  if (kind === "pdf") {
+    if (onPhone) return card("PDFs open in a PDF app on the phone.");
+    return el("div", { class: "vcard" }, el("div", { class: "vicon" }, "📄"),
+      el("p", {}, "PDFs open in the browser's own PDF viewer."),
+      el("a", { class: "btn primary", href: src, target: "_blank", rel: "noopener" }, "Open the PDF in a new tab"));
+  }
+  if (kind === "text") {
+    const pre = el("pre", { class: "vtext" }, "Loading…");
+    loadText(pre, src, e.size);
+    return pre;
+  }
+  return card(`${e.name} can't be previewed here.`);
+}
+
+async function loadText(pre, src, size) {
+  try {
+    const r = await fetch(src, { headers: { Range: `bytes=0-${textLimit - 1}` } });
+    if (!r.ok && r.status !== 206) throw new Error((await r.json().catch(() => ({}))).error || `error ${r.status}`);
+    const text = new TextDecoder("utf-8").decode(await r.arrayBuffer());
+    pre.textContent = text;
+    if (size > textLimit) pre.append(el("div", { class: "vmore" }, `Showing the first ${bytes(textLimit)} of ${bytes(size)}. Download it to see the rest.`));
+  } catch (err) {
+    pre.textContent = `Couldn't load it: ${err.message}`;
+  }
+}
+
+// Phone: hand a file to another app (a PDF reader, an office app…).
+async function openWithApp(e) {
+  try {
+    await startBulk("open", [e]);
+    toast(`Getting ${e.name} ready; your apps will open in a moment.`);
+  } catch (err) { toast(err.message); }
+}
+
+// A horizontal swipe on the viewer moves to the previous or next file.
+function swipeToStep(node) {
+  let x0 = null, y0 = 0;
+  node.addEventListener("touchstart", (ev) => {
+    if (ev.touches.length !== 1 || ev.target.closest("video, audio, img:not(.fit)")) { x0 = null; return; }
+    x0 = ev.touches[0].clientX; y0 = ev.touches[0].clientY;
+  }, { passive: true });
+  node.addEventListener("touchend", (ev) => {
+    if (x0 === null) return;
+    const t = ev.changedTouches[0];
+    const dx = t.clientX - x0, dy = t.clientY - y0;
+    x0 = null;
+    if (Math.abs(dx) > 60 && Math.abs(dy) < 50) stepViewer(dx < 0 ? 1 : -1);
+  }, { passive: true });
+}
+
+function viewerKeys(ev) {
+  if (!$("viewer") || $("dlg").open) return false;
+  if (ev.key === "Escape") { closeViewer(); return true; }
+  if (ev.target.closest && ev.target.closest("video, audio")) return false; // their own seeking keys
+  if (ev.key === "ArrowLeft") { stepViewer(-1); return true; }
+  if (ev.key === "ArrowRight") { stepViewer(1); return true; }
+  return false;
+}
+
+// The phone's back button closes a preview or dialog before leaving the page.
+window.tgvaultBack = () => {
+  if (closeViewer()) return true;
+  if ($("dlg").open) { $("dlg").close(); return true; }
+  return closeMenu();
+};
 
 // Reload the list when another device's files arrive (or anything changes),
 // without disturbing the selection.
@@ -1234,6 +1418,8 @@ document.addEventListener("DOMContentLoaded", () => {
   addEventListener("scroll", closeMenu, true);
   addEventListener("blur", closeMenu);
   document.addEventListener("keydown", (ev) => {
+    if (viewerKeys(ev)) { ev.preventDefault(); return; }
+    if ($("viewer")) return; // the rows behind the preview don't react
     if (ev.key !== "Escape" || $("dlg").open) return;
     if (closeMenu()) return;
     if (ev.target.matches && ev.target.matches("input:not([type=checkbox]), select, textarea")) return; // e.g. clearing the search box

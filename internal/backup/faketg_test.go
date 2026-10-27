@@ -15,10 +15,11 @@ import (
 
 // fakeTG is an in-memory Telegram channel for tests.
 type fakeTG struct {
-	mu    sync.Mutex
-	next  int
-	msgs  map[int]*fakeMsg
-	calls int // uploads attempted
+	mu         sync.Mutex
+	next       int
+	msgs       map[int]*fakeMsg
+	calls      int // uploads attempted
+	blockReads int
 
 	// Hooks for simulating trouble; each may be nil.
 	beforeUpload func(n int, req tgclient.UploadRequest) error // n counts from 1
@@ -92,6 +93,22 @@ func (f *fakeTG) Download(ctx context.Context, id int, w io.Writer) error {
 	}
 	_, err := w.Write(data)
 	return err
+}
+
+func (f *fakeTG) ReadBlock(ctx context.Context, id int, n int64) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.blockReads++
+	m, ok := f.msgs[id]
+	if !ok {
+		return nil, errors.New("this file is no longer in the Telegram channel")
+	}
+	start := n * tgclient.BlockSize
+	if start >= int64(len(m.data)) {
+		return nil, io.EOF
+	}
+	end := min(start+tgclient.BlockSize, int64(len(m.data)))
+	return append([]byte(nil), m.data[start:end]...), nil
 }
 
 func (f *fakeTG) DeleteMessages(ctx context.Context, ids []int) error {

@@ -36,6 +36,7 @@ type PhoneOptions struct {
 	FileChanged func(path string)        // tell Android's media scanner
 	Notify      func(title, body string) // show an Android notification
 	Share       func(paths []string)     // open Android's share sheet for files
+	Open        func(path string)        // open a file in another app ("Open with…")
 }
 
 // App is a running tgvault.
@@ -71,7 +72,7 @@ func Start(ctx context.Context, o Options) (*App, error) {
 	srv := web.New(st, tg, eng, nw, o.Token, addr, o.Version, cancel)
 	if p := o.Phone; p != nil {
 		a.phone = &web.Phone{StorageRoot: p.StorageRoot, FileChanged: p.FileChanged,
-			ShareDir: filepath.Join(o.DataDir, "share"), Share: p.Share}
+			ShareDir: filepath.Join(o.DataDir, "share"), Share: p.Share, Open: p.Open}
 		srv.SetPhone(a.phone)
 		tg.SetDevice("Phone", "Android")
 		// Uploads in the background run in the backup job, which Android

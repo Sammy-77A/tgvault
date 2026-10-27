@@ -60,6 +60,15 @@ Telegram stores at most about 2 GB per message, so bigger files are stored as se
 
 The parts are a plain split, so you can also rebuild a file without tgvault: download every part from the channel and join them in order, e.g. `copy /b movie.mkv.part1of3 + movie.mkv.part2of3 + movie.mkv.part3of3 movie.mkv` on Windows or `cat movie.mkv.part* > movie.mkv` elsewhere. Restoring needs as much free space as the file itself; tgvault checks first.
 
+## Previews
+
+**View** on a file in Cloud files (or double-click it, or press Enter) shows it without restoring it: pictures, videos and music with a seek bar, the first 512 KB of text and code files, and PDFs in the browser's own PDF viewer (on the phone, in a PDF app through **Open with…**). ← and → (or a swipe on the phone) move through the files in the list.
+
+- A file that's still on this device unchanged is shown from the disk, with no Telegram traffic. Otherwise only the part being looked at is fetched from Telegram, 1 MB at a time: jumping to the middle of a 2 GB film fetches a few MB, and files over 2 GB work the same way.
+- Nothing is saved to disk for a preview. Downloads and restores still check every file's SHA-256; a preview checks it when it reads a whole file (pictures, text).
+- Previews are served so they can't run anything inside tgvault: web pages, SVG scripts and code show as plain text or are blocked from running.
+- Whether a video or song plays depends on the formats the browser or phone supports; some `.mkv` videos (x265/HEVC) play sound only. Download or Open with… plays them in another app.
+
 ## Projects
 
 A project is stored as a **chain**: a full ZIP of the project, then a change ZIP for each later backup. A change ZIP holds only the files added or modified since the backup before it, plus `.tgvault-deleted.txt` listing the files that were deleted (and `.tgvault-change.txt`, which says in words which full backup and change it follows). Editing one file in a 500 MB project uploads that file, not 500 MB again.

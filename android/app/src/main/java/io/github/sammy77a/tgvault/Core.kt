@@ -1,6 +1,7 @@
 package io.github.sammy77a.tgvault
 
 import android.Manifest
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -12,6 +13,7 @@ import android.os.BatteryManager
 import android.os.Build
 import android.os.Environment
 import android.os.PowerManager
+import android.webkit.MimeTypeMap
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.FileProvider
 import java.io.File
@@ -102,5 +104,17 @@ class AndroidHost(private val ctx: Context) : Host {
         send.type = "*/*"
         send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         ctx.startActivity(Intent.createChooser(send, "Share from tgvault").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+
+    override fun openFile(path: String) {
+        val file = File(path)
+        val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.files", file)
+        val type = MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension.lowercase()) ?: "*/*"
+        val view = Intent(Intent.ACTION_VIEW).setDataAndType(uri, type).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        try {
+            ctx.startActivity(Intent.createChooser(view, "Open with").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (e: ActivityNotFoundException) {
+            Notifications.alert(ctx, "No app can open ${file.name}", "Use Share or Download instead.")
+        }
     }
 }

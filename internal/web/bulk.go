@@ -120,6 +120,19 @@ func (s *Server) bulk(w http.ResponseWriter, r *http.Request) {
 				share(written)
 			}
 		})
+	case "open": // phone: copy one file into the app, then let another app open it
+		if s.phone == nil || s.phone.Open == nil || len(paths) != 1 {
+			fail(w, 400, "opening in another app is only on the phone, one file at a time")
+			return
+		}
+		dir := s.phone.ShareDir
+		_ = os.RemoveAll(dir) // the same folder as sharing; only the latest is kept
+		open := s.phone.Open
+		id, err = s.eng.RestoreMany(ctx, paths, dir, "Preparing to open", func(written []string) {
+			if len(written) == 1 {
+				open(written[0])
+			}
+		})
 	case "free-plan":
 		plan, err := s.eng.PlanFreeMany(paths)
 		if err != nil {

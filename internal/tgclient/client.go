@@ -74,6 +74,8 @@ type Client struct {
 	dataDir string
 	version string
 
+	locs sync.Map // message ID -> fileLoc, for previews (see ReadBlock)
+
 	mu        sync.Mutex
 	status    string
 	lastErr   string

@@ -1,6 +1,6 @@
 # File previews
 
-Status: proposed 2026-10-27, waiting for the owner's OK.
+Status: approved 2026-10-27 and implemented. Built differently from the plan: text is read through the same `/api/preview` endpoint with a Range header (no separate text endpoint).
 
 ## Goal
 

@@ -379,6 +379,66 @@ func (c *Client) Download(ctx context.Context, msgID int, w io.Writer) error {
 	return err
 }
 
+// BlockSize is how much ReadBlock returns at a time: Telegram hands out files
+// in 1 MB pieces at 1 MB boundaries.
+const BlockSize = 1 << 20
+
+// fileLoc is where Telegram keeps a message's file. Its file reference
+// expires after a while, so it's looked up again when Telegram says so.
+type fileLoc struct {
+	loc  *tg.InputDocumentFileLocation
+	size int64
+	at   time.Time
+}
+
+// ReadBlock returns block number n (BlockSize bytes, fewer at the end) of a
+// stored file, for previews that read only part of a file.
+func (c *Client) ReadBlock(ctx context.Context, msgID int, n int64) ([]byte, error) {
+	for attempt := 0; ; attempt++ {
+		fl, err := c.fileLoc(ctx, msgID, attempt > 0)
+		if err != nil {
+			return nil, err
+		}
+		if n*BlockSize >= fl.size {
+			return nil, io.EOF
+		}
+		api, _, err := c.conn()
+		if err != nil {
+			return nil, err
+		}
+		res, err := api.UploadGetFile(ctx, &tg.UploadGetFileRequest{Location: fl.loc, Offset: n * BlockSize, Limit: BlockSize})
+		if err != nil {
+			if attempt == 0 && tgerr.Is(err, "FILE_REFERENCE_EXPIRED", "FILE_REFERENCE_INVALID") {
+				continue // look the file up again
+			}
+			return nil, err
+		}
+		f, ok := res.(*tg.UploadFile)
+		if !ok {
+			return nil, fmt.Errorf("unexpected reply %T", res)
+		}
+		return f.Bytes, nil
+	}
+}
+
+func (c *Client) fileLoc(ctx context.Context, msgID int, refresh bool) (fileLoc, error) {
+	if v, ok := c.locs.Load(msgID); ok && !refresh && time.Since(v.(fileLoc).at) < 30*time.Minute {
+		return v.(fileLoc), nil
+	}
+	docs, err := c.getDocs(ctx, []int{msgID})
+	if err != nil {
+		return fileLoc{}, err
+	}
+	rf, ok := docs[msgID]
+	if !ok {
+		return fileLoc{}, errors.New("this file is no longer in the Telegram channel")
+	}
+	fl := fileLoc{loc: &tg.InputDocumentFileLocation{ID: rf.doc.ID, AccessHash: rf.doc.AccessHash,
+		FileReference: rf.doc.FileReference}, size: rf.Size, at: time.Now()}
+	c.locs.Store(msgID, fl)
+	return fl, nil
+}
+
 // DeleteMessages removes messages (old versions) from the channel.
 func (c *Client) DeleteMessages(ctx context.Context, ids []int) error {
 	if len(ids) == 0 {

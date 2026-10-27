@@ -174,6 +174,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/cloud", s.cloud)
 	s.mux.HandleFunc("GET /api/versions", s.versions)
 	s.mux.HandleFunc("GET /api/download", s.download)
+	s.mux.HandleFunc("GET /api/preview", s.preview)
 	s.mux.HandleFunc("GET /api/download-zip", s.downloadZip)
 	s.mux.HandleFunc("POST /api/restore", s.restore)
 	s.mux.HandleFunc("GET /api/free-plan", s.freePlan)
@@ -576,25 +577,9 @@ func urlEscape(s string) string {
 
 // download sends one file version to the browser (latest unless ?msg= is given).
 func (s *Server) download(w http.ResponseWriter, r *http.Request) {
-	var v store.Version
-	if m := r.URL.Query().Get("msg"); m != "" {
-		id, _ := strconv.Atoi(m)
-		var err error
-		if v, err = s.eng.Version(id); err != nil {
-			fail(w, 404, "unknown version")
-			return
-		}
-	} else {
-		p, ok := cleanCloudPath(r.URL.Query().Get("path"))
-		var found bool
-		var err error
-		if ok {
-			v, found, err = s.eng.LatestVersion(p)
-		}
-		if !ok || err != nil || !found {
-			fail(w, 404, "not found")
-			return
-		}
+	v, ok := s.queryVersion(w, r)
+	if !ok {
+		return
 	}
 	name := path.Base(v.CloudPath)
 	if v.Kind == store.KindProject {
