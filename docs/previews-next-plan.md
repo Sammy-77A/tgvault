@@ -1,6 +1,16 @@
 # Previews, part 2: thumbnails, looking inside ZIPs, videos that don't play
 
-Status: plan, not started (2026-10-27).
+Status: part 1 (thumbnails) implemented 2026-10-27; parts 2 and 3 not started.
+
+Part 1 turned out simpler than planned. The first step found that Telegram
+already makes thumbnails for every stored picture (JPEG, PNG, WebP, GIF) and
+`.mp4` video, even when sent as files, and none for `.mkv` or music. So
+nothing is made or uploaded during backups, and old backups have thumbnails
+on every device. Pictures Telegram skipped are shrunk locally when the
+original is still on the device. Whether each file has a Telegram thumbnail
+is learned when it's first shown (remembered for a few hours when it has
+none), so there is no new database column. Video thumbnails for `.mkv` wait
+for ffmpeg (part 3).
 
 These are the three items the first previews plan left out. Each part can be
 built and shipped on its own. The suggested order is at the end.

@@ -5,6 +5,7 @@ go 1.27.0
 require (
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gotd/td v0.163.0
+	golang.org/x/image v0.47.0
 	golang.org/x/mobile v0.0.0-20261011034528-197770444867
 	golang.org/x/sync v0.24.0
 	golang.org/x/sys v0.49.0

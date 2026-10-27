@@ -45,6 +45,7 @@ type Engine struct {
 	bigSlot           chan struct{}  // held while a file over 2 GB uploads
 	bigProjects       map[int64]bool // projects whose ZIP is over 2 GB (guarded by mu)
 	previews          *blockCache    // recently previewed blocks
+	thumbs            *thumbCache
 
 	wake   chan struct{}
 	scanCh chan int64 // root ID, or 0 for all roots
@@ -102,6 +103,7 @@ func newEngine(st *store.Store, dataDir string) *Engine {
 		bigSlot:     make(chan struct{}, 1),
 		bigProjects: map[int64]bool{},
 		previews:    newBlockCache(),
+		thumbs:      &thumbCache{dir: filepath.Join(dataDir, "thumbs"), none: map[int]time.Time{}},
 		tmpDir:      filepath.Join(dataDir, "tmp"),
 		wake:        make(chan struct{}, 1),
 		scanCh:      make(chan int64, 64),
@@ -167,6 +169,7 @@ func (e *Engine) ForgetAccount() {
 	e.mu.Lock()
 	e.reconcile = Reconcile{}
 	e.mu.Unlock()
+	_ = e.ClearThumbs()
 }
 
 func (e *Engine) scanLoop(ctx context.Context) {

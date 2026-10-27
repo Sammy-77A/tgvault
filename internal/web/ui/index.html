@@ -147,6 +147,7 @@
             <option value="type">Sort: type</option>
           </select>
           <button class="small" id="cloudDir" type="button" title="Reverse the order">↑</button>
+          <button class="small" id="cloudGrid" type="button" aria-pressed="false">Grid</button>
           <button class="small" id="cloudDates" type="button">Dates…</button>
           <button class="small" id="cloudRefresh" type="button">Refresh</button>
         </div>
@@ -234,6 +235,10 @@
         <div class="setting">
           <div><b>Check against Telegram</b><p class="hint" id="reconcileText">Re-reads the backup channel to find files added or deleted there.</p></div>
           <button id="reconcile">Check now</button>
+        </div>
+        <div class="setting">
+          <div><b>Thumbnails</b><p class="hint" id="thumbText"></p></div>
+          <button id="clearThumbs">Clear</button>
         </div>
         <div class="setting">
           <div><b>Account</b><p class="hint" id="accountText"></p></div>

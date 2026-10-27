@@ -351,6 +351,78 @@ func remoteFile(m any) (RemoteFile, bool) {
 	return RemoteFile{MsgID: msg.ID, Caption: msg.Message, Size: doc.Size, Date: msg.Date, doc: doc}, true
 }
 
+// thumbType is the type letter of a document's largest thumbnail picture, or
+// "" when it has none. Tiny inline previews and outlines don't count.
+func thumbType(doc *tg.Document) string {
+	best, bestW := "", 0
+	for _, t := range doc.Thumbs {
+		var typ string
+		var w int
+		switch s := t.(type) {
+		case *tg.PhotoSize:
+			typ, w = s.Type, s.W
+		case *tg.PhotoSizeProgressive:
+			typ, w = s.Type, s.W
+		default:
+			continue
+		}
+		if w > bestW {
+			best, bestW = typ, w
+		}
+	}
+	return best
+}
+
+// Thumbs fetches the thumbnail pictures (small JPEGs) Telegram keeps for
+// stored files. A message with no thumbnail, or that is gone, maps to nil; a
+// message whose thumbnail couldn't be fetched right now is left out.
+func (c *Client) Thumbs(ctx context.Context, ids []int) (map[int][]byte, error) {
+	docs, err := c.getDocs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	api, _, err := c.conn()
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[int][]byte, len(ids))
+	var mu sync.Mutex
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(4)
+	for _, id := range ids {
+		rf, ok := docs[id]
+		typ := ""
+		if ok {
+			typ = thumbType(rf.doc)
+		}
+		if typ == "" {
+			out[id] = nil
+			continue
+		}
+		g.Go(func() error {
+			loc := &tg.InputDocumentFileLocation{ID: rf.doc.ID, AccessHash: rf.doc.AccessHash,
+				FileReference: rf.doc.FileReference, ThumbSize: typ}
+			res, err := api.UploadGetFile(gctx, &tg.UploadGetFileRequest{Location: loc, Limit: BlockSize})
+			if err != nil {
+				if _, flood := tgerr.AsFloodWait(err); flood || gctx.Err() != nil {
+					return err
+				}
+				return nil // try again another time
+			}
+			if f, ok := res.(*tg.UploadFile); ok && len(f.Bytes) > 0 {
+				mu.Lock()
+				out[id] = f.Bytes
+				mu.Unlock()
+			}
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // Exists returns which of the message IDs still hold files.
 func (c *Client) Exists(ctx context.Context, ids []int) (map[int]RemoteFile, error) {
 	return c.getDocs(ctx, ids)

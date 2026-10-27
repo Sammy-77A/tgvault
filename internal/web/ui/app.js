@@ -589,12 +589,90 @@ function cloudRow(e) {
     ondblclick: (ev) => { if (e.kind === "file" && !ev.target.closest("button, input, a")) openViewer(e); },
   }),
     box,
-    el("span", { class: "icon" }, icon),
+    e.kind === "file" ? thumbIcon(e.msgId, e.type, icon) : el("span", { class: "icon" }, icon),
     el("div", { class: "grow" },
       el("div", { class: "name" }, e.name),
       cloud.searching && folder ? el("div", { class: "sub" }, `in ${folder}`) : null,
       el("div", { class: "sub" }, sub, " ", label ? el("span", { class: `pill ${cls}` }, label) : null)),
     el("div", { class: "actions" }, actions));
+}
+
+// ---- thumbnails ----
+
+// What's known about each version's thumbnail: true (kept on this device),
+// false (none). Rows ask for theirs only once they scroll into view, a batch
+// at a time.
+const thumbKnown = new Map();
+const thumbWanted = new Set();
+let thumbTimer = null, thumbBusy = false;
+const thumbTypes = new Set(["image", "video", "audio"]);
+
+// thumbIcon is a row's icon: its thumbnail when there is one, else icon.
+function thumbIcon(msgId, type, icon) {
+  if (!msgId || !thumbTypes.has(type) || thumbKnown.get(msgId) === false) return el("span", { class: "icon" }, icon);
+  const span = el("span", { class: "icon thumb", "data-thumb": msgId, "data-icon": icon }, icon);
+  if (thumbKnown.get(msgId)) showThumb(span);
+  else thumbSeen.observe(span);
+  return span;
+}
+
+function showThumb(span) {
+  const id = span.dataset.thumb;
+  const img = el("img", { src: `/api/thumb?msg=${id}`, alt: "", decoding: "async" });
+  img.addEventListener("error", () => { thumbKnown.set(Number(id), false); span.classList.remove("thumb", "has"); span.replaceChildren(span.dataset.icon); });
+  span.classList.add("has");
+  span.replaceChildren(img);
+}
+
+const thumbSeen = new IntersectionObserver((seen) => {
+  for (const s of seen) {
+    if (!s.isIntersecting) continue;
+    thumbSeen.unobserve(s.target);
+    thumbWanted.add(Number(s.target.dataset.thumb));
+  }
+  if (thumbWanted.size && !thumbTimer) thumbTimer = setTimeout(fetchThumbs, 120);
+}, { rootMargin: "300px 0px" });
+
+async function fetchThumbs() {
+  thumbTimer = null;
+  if (thumbBusy) return;
+  thumbBusy = true;
+  try {
+    while (thumbWanted.size) {
+      // Only rows still on the page (the list may have been redrawn).
+      const onPage = new Set([...document.querySelectorAll("span[data-thumb]:not(.has)")].map((s) => Number(s.dataset.thumb)));
+      const ids = [...thumbWanted].filter((id) => onPage.has(id) && !thumbKnown.has(id)).slice(0, 40);
+      for (const id of ids) thumbWanted.delete(id);
+      for (const id of [...thumbWanted]) if (!onPage.has(id) || thumbKnown.has(id)) thumbWanted.delete(id);
+      if (!ids.length) break;
+      let got;
+      try { got = await api(`/api/thumbs?ids=${ids.join(",")}`); } catch { break; }
+      for (const id of ids) {
+        if (!(id in got)) continue;
+        thumbKnown.set(id, got[id]);
+      }
+      applyThumbs();
+    }
+  } finally { thumbBusy = false; }
+}
+
+// applyThumbs fills in rows whose thumbnail is now known, including rows
+// drawn again while it was being fetched.
+function applyThumbs() {
+  for (const span of document.querySelectorAll("span[data-thumb]:not(.has)")) {
+    const known = thumbKnown.get(Number(span.dataset.thumb));
+    if (known === true) showThumb(span);
+    else if (known === false) { span.classList.remove("thumb"); span.replaceChildren(span.dataset.icon); }
+  }
+}
+
+// Grid view of Cloud files, remembered on this device.
+function setGrid(on) {
+  cloud.grid = on;
+  try { localStorage.setItem("tgvault.grid", on ? "1" : ""); } catch {}
+  $("cloudList").classList.toggle("grid", on);
+  $("cloudGrid").textContent = on ? "List" : "Grid";
+  $("cloudGrid").setAttribute("aria-pressed", on ? "true" : "false");
 }
 
 function openCloud(p) {
@@ -712,8 +790,8 @@ function rowFor(p, key) {
   return [...$(p.list).children].find((li) => li.dataset.path === key);
 }
 
-// Right-click (long-press on the phone) menu: "Select up to here" and, on a
-// selected item, "Deselect".
+// Right-click (long-press on the phone) menu: "Select up to here", on a
+// selected item "Deselect", and "View" for files.
 function rowMenu(p, ev, x) {
   ev.preventDefault();
   closeMenu();
@@ -721,6 +799,8 @@ function rowMenu(p, ev, x) {
   if (p.selected.has(p.key(x))) {
     items.push(el("button", { type: "button", onclick: () => { closeMenu(); toggleOne(p, x); } }, "Deselect"));
   }
+  // Grid tiles have no room for all the buttons.
+  if (p.view && x.kind === "file") items.push(el("button", { type: "button", onclick: () => { closeMenu(); p.view(x); } }, "View"));
   const menu = el("div", { class: "ctxmenu", id: "ctxmenu", role: "menu" }, items);
   document.body.append(menu);
   const r = menu.getBoundingClientRect();
@@ -1100,6 +1180,11 @@ function viewContent(e, kind, src, msgId) {
     el("p", { class: "hint" }, onPhone ? "Download saves it to Download/tgvault; Open with… lets another app show it." : "Download saves it to this PC."));
   if (kind === "image") {
     const img = el("img", { src, alt: e.name, class: "fit" });
+    if (thumbKnown.get(msgId)) {
+      img.classList.add("loading");
+      img.style.backgroundImage = `url("/api/thumb?msg=${msgId}")`;
+      img.addEventListener("load", () => { img.classList.remove("loading"); img.style.backgroundImage = ""; }, { once: true });
+    }
     img.addEventListener("click", () => img.classList.toggle("fit"));
     img.addEventListener("error", () => img.replaceWith(card("This picture can't be shown here (it may be in a format the browser doesn't read).")));
     return img;
@@ -1243,7 +1328,7 @@ function renderSpace() {
     const folder = r.cloudPath.slice(0, r.cloudPath.lastIndexOf("/"));
     return el("li", pickRow(space, r),
       pickBox(space, r, name),
-      el("span", { class: "icon" }, typeIcons[r.type] || "📄"),
+      thumbIcon(r.msgId, r.type, typeIcons[r.type] || "📄"),
       el("div", { class: "grow" },
         el("div", { class: "name" }, name),
         el("div", { class: "sub" }, `${bytes(r.size)} · modified ${when(r.mtime)} · in ${folder}`)));
@@ -1362,6 +1447,7 @@ function renderSettings() {
     : rc.last ? `Last checked ${when(rc.last)}: ${rc.files} backed-up items found in Telegram.`
     : "Re-reads the backup channel to find files added or deleted there.";
   $("versionText").textContent = `tgvault ${state.version}`;
+  $("thumbText").textContent = `Small pictures shown in Cloud files: ${bytes(state.thumbBytes || 0)} kept on this ${onPhone ? "phone" : "PC"}. Cleared ones are fetched again when needed.`;
   if (state.phone) {
     $("wifiOnly").checked = state.phone.wifiOnly;
     $("chargingOnly").checked = state.phone.chargingOnly;
@@ -1409,6 +1495,10 @@ document.addEventListener("DOMContentLoaded", () => {
     loadCloud();
   });
   $("cloudRefresh").addEventListener("click", () => refreshCloud(true));
+  let grid = false;
+  try { grid = localStorage.getItem("tgvault.grid") === "1"; } catch {}
+  setGrid(grid);
+  $("cloudGrid").addEventListener("click", () => setGrid(!cloud.grid));
   $("selAll").addEventListener("change", (ev) => selectAll(ev.target.checked));
   for (const p of [cloud, space]) {
     $(p.list).addEventListener("keydown", (ev) => listKeys(p, ev));
@@ -1464,6 +1554,9 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   $("testNotify").addEventListener("click", () => api("/api/notify/test", {})
     .then(() => toast(onPhone ? "Sent. Check your notifications." : "Sent. Look at the bottom-right of your screen."))
+    .catch((err) => toast(err.message)));
+  $("clearThumbs").addEventListener("click", () => api("/api/thumbs/clear", {})
+    .then(() => { thumbKnown.clear(); toast("Thumbnails cleared."); refresh(); renderCloud(); })
     .catch((err) => toast(err.message)));
   $("reconcile").addEventListener("click", () => api("/api/reconcile", {}).then(() => { toast("Checking Telegram…"); refresh(); }));
   $("logout").addEventListener("click", () => dialog({

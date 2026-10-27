@@ -259,3 +259,31 @@ body.viewing { overflow: hidden; }
   background: none; border: 0; border-radius: 6px; color: var(--text); font-weight: normal;
 }
 .ctxmenu button:hover, .ctxmenu button:focus-visible { background: var(--accent-soft); outline: none; }
+
+/* Thumbnails */
+.list .icon.thumb.has { width: 2.5rem; height: 2.5rem; }
+.list .icon.thumb img { width: 100%; height: 100%; object-fit: cover; border-radius: 5px; display: block; background: var(--line); }
+.viewer img.loading { background: center / contain no-repeat; min-width: min(100%, 320px); min-height: min(100%, 320px); }
+
+/* Grid view of Cloud files */
+.files.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: .6rem; margin-top: .5rem; }
+.phone .files.grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .35rem; }
+.files.grid li[data-path] {
+  position: relative; flex-direction: column; align-items: stretch; gap: .3rem; margin: 0; padding: .35rem;
+  border: 1px solid var(--line); border-radius: 8px; flex-wrap: nowrap; min-width: 0;
+}
+.files.grid li.selected { box-shadow: inset 0 0 0 2px var(--accent); }
+.files.grid li.selected + li.selected { border-top-color: var(--line); }
+.files.grid .icon, .files.grid .icon.thumb.has {
+  width: 100%; height: auto; aspect-ratio: 1; display: flex; align-items: center; justify-content: center;
+  font-size: 2.6rem; background: color-mix(in srgb, var(--line) 40%, transparent); border-radius: 6px; overflow: hidden;
+}
+.files.grid .icon.thumb img { border-radius: 0; }
+.files.grid .pick { position: absolute; top: .55rem; left: .55rem; z-index: 1; margin: 0; }
+.files.grid li:not(.selected) .pick { opacity: .75; }
+.files.grid .name { font-size: .85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal; }
+.files.grid .sub { font-size: .75rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.files.grid .sub + .sub, .files.grid .sub .pill { display: none; }
+.files.grid .actions, .phone .files.grid li .actions { width: auto; padding: 0; flex-basis: auto; }
+.files.grid .actions button:not(:first-child) { display: none; }
+.files.grid .actions button { padding: .2rem .5rem; font-size: .8rem; }

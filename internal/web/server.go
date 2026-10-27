@@ -175,6 +175,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/versions", s.versions)
 	s.mux.HandleFunc("GET /api/download", s.download)
 	s.mux.HandleFunc("GET /api/preview", s.preview)
+	s.mux.HandleFunc("GET /api/thumbs", s.thumbs)
+	s.mux.HandleFunc("GET /api/thumb", s.thumb)
+	s.mux.HandleFunc("POST /api/thumbs/clear", s.clearThumbs)
 	s.mux.HandleFunc("GET /api/download-zip", s.downloadZip)
 	s.mux.HandleFunc("POST /api/restore", s.restore)
 	s.mux.HandleFunc("GET /api/free-plan", s.freePlan)
@@ -267,6 +270,7 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 		"pairing":    s.pairingInfo(),
 		"phone":      s.phoneState(),
 		"cloudStamp": s.st.VersionStamp(),
+		"thumbBytes": s.eng.ThumbBytes(),
 	})
 }
 

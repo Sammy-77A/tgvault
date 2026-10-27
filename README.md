@@ -69,6 +69,15 @@ The parts are a plain split, so you can also rebuild a file without tgvault: dow
 - Previews are served so they can't run anything inside tgvault: web pages, SVG scripts and code show as plain text or are blocked from running.
 - Whether a video or song plays depends on the formats the browser or phone supports; some `.mkv` videos (x265/HEVC) play sound only. Download or Open with… plays them in another app.
 
+### Thumbnails
+
+Pictures, phone videos (`.mp4`) and GIFs show a small picture in Cloud files and Free up space, and **Grid** shows a folder as tiles (remembered per device; right-click or long-press a tile for View).
+
+- They are the thumbnails Telegram makes by itself for each stored file (5 to 20 KB each), fetched only for the rows on screen, a batch at a time. Nothing extra is uploaded.
+- A picture Telegram made no thumbnail for is shrunk on this device when the original is still here.
+- They are kept on disk (up to 200 MB on the PC, 50 MB on the phone; the least recently shown go first) and can be cleared in Settings.
+- Telegram makes no thumbnails for `.mkv` videos or music, so those keep their icon.
+
 ## Projects
 
 A project is stored as a **chain**: a full ZIP of the project, then a change ZIP for each later backup. A change ZIP holds only the files added or modified since the backup before it, plus `.tgvault-deleted.txt` listing the files that were deleted (and `.tgvault-change.txt`, which says in words which full backup and change it follows). Editing one file in a 500 MB project uploads that file, not 500 MB again.

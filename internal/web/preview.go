@@ -100,3 +100,49 @@ func (s *Server) queryVersion(w http.ResponseWriter, r *http.Request) (store.Ver
 	}
 	return v, true
 }
+
+// thumbs fetches the thumbnails of the versions in ?ids= (comma-separated)
+// and says which have one; the page then shows them with /api/thumb.
+func (s *Server) thumbs(w http.ResponseWriter, r *http.Request) {
+	var ids []int
+	for _, f := range strings.Split(r.URL.Query().Get("ids"), ",") {
+		if id, err := strconv.Atoi(f); err == nil {
+			ids = append(ids, id)
+		}
+	}
+	got, err := s.eng.Thumbs(r.Context(), ids)
+	if err != nil {
+		fail(w, 502, tgclient.Friendly(err))
+		return
+	}
+	out := make(map[string]bool, len(got))
+	for id, ok := range got {
+		out[strconv.Itoa(id)] = ok
+	}
+	writeJSON(w, out)
+}
+
+// thumb serves a thumbnail kept on this device.
+func (s *Server) thumb(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.Atoi(r.URL.Query().Get("msg"))
+	p, ok := s.eng.ThumbFile(id)
+	if !ok {
+		fail(w, 404, "no thumbnail")
+		return
+	}
+	h := w.Header()
+	h.Set("Content-Type", "image/jpeg")
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Content-Security-Policy", "sandbox; default-src 'none'")
+	// A message's file never changes, so neither does its thumbnail.
+	h.Set("Cache-Control", "private, max-age=604800")
+	http.ServeFile(w, r, p)
+}
+
+func (s *Server) clearThumbs(w http.ResponseWriter, r *http.Request) {
+	if err := s.eng.ClearThumbs(); err != nil {
+		fail(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, map[string]bool{"ok": true})
+}

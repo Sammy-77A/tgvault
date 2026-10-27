@@ -20,6 +20,8 @@ type fakeTG struct {
 	msgs       map[int]*fakeMsg
 	calls      int // uploads attempted
 	blockReads int
+	thumbs     map[int][]byte // message ID -> the thumbnail Telegram keeps
+	thumbCalls int
 
 	// Hooks for simulating trouble; each may be nil.
 	beforeUpload func(n int, req tgclient.UploadRequest) error // n counts from 1
@@ -199,4 +201,15 @@ func (f *fakeTG) count() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.msgs)
+}
+
+func (f *fakeTG) Thumbs(ctx context.Context, ids []int) (map[int][]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.thumbCalls++
+	out := map[int][]byte{}
+	for _, id := range ids {
+		out[id] = f.thumbs[id]
+	}
+	return out, nil
 }

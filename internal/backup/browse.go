@@ -305,6 +305,7 @@ type Recommendation struct {
 	Mtime     int64  `json:"mtime"`
 	Uploaded  int64  `json:"uploaded"`
 	Type      string `json:"type"`
+	MsgID     int    `json:"msgId"`
 }
 
 // Recommendations lists files whose backup matches the file on this device,
@@ -334,7 +335,7 @@ func (e *Engine) Recommendations(minSize int64, typ string, byAge bool) ([]Recom
 		if typ != "" && t != typ {
 			continue
 		}
-		out = append(out, Recommendation{CloudPath: it.CloudPath, Size: it.Size, Mtime: it.Mtime, Uploaded: v.UploadedAt, Type: t})
+		out = append(out, Recommendation{CloudPath: it.CloudPath, Size: it.Size, Mtime: it.Mtime, Uploaded: v.UploadedAt, Type: t, MsgID: v.MsgID})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if byAge {
