@@ -496,6 +496,10 @@ const cloud = {
   selected: new Map(), // path -> entry
   order: [],    // entries as shown, so ranges follow the list on screen
   anchor: null, // path of the item ranges start from
+  list: "cloudList",
+  key: (e) => e.path,
+  open: (e) => { if (e.kind !== "folder") return false; openCloud(e.path); return true; },
+  render: () => renderSelection(),
 };
 
 function cloudFilters() {
@@ -558,7 +562,7 @@ function renderCloud() {
   $("cloudDir").textContent = cloud.desc ? "↓" : "↑";
 
   cloud.order = sortEntries(cloud.entries);
-  replace($("cloudList"), cloud.order.map(cloudRow));
+  replaceRows(cloud, cloud.order.map(cloudRow));
   renderSelection();
 }
 
@@ -570,16 +574,7 @@ function cloudRow(e) {
   const sub = isFolder
     ? `${e.files} item${e.files > 1 ? "s" : ""} · ${bytes(e.size)}`
     : `${bytes(e.size)} · modified ${when(e.mtime)}${e.versions > 1 ? ` · ${e.versions} versions` : ""}${e.parts ? ` · stored in ${e.parts} parts` : ""}${e.kind === "project" ? " · project ZIP" : ""}`;
-  let shift = false;
-  const box = el("input", {
-    type: "checkbox", class: "pick", "aria-label": `Select ${e.name}`, checked: cloud.selected.has(e.path),
-    onclick: (ev) => { ev.stopPropagation(); shift = ev.shiftKey; },
-    onchange: (ev) => {
-      if (shift) selectRange(e, true);
-      else if (ev.target.checked) { cloud.selected.set(e.path, e); cloud.anchor = e.path; renderSelection(); }
-      else { cloud.selected.delete(e.path); renderSelection(); }
-    },
-  });
+  const box = pickBox(cloud, e, e.name);
   // Download and Restore act on the whole selection when this item is part of it.
   const targets = () => (cloud.selected.has(e.path) && cloud.selected.size > 1 ? [...cloud.selected.values()] : [e]);
   const actions = isFolder ? [] : [
@@ -587,12 +582,7 @@ function cloudRow(e) {
     el("button", { class: "small", "data-label": "Restore", onclick: (ev) => { ev.stopPropagation(); restore(targets()); } }, "Restore"),
     e.versions > 1 ? el("button", { class: "small", onclick: (ev) => { ev.stopPropagation(); showVersions(e); } }, "Versions") : null,
   ];
-  return el("li", {
-    class: isFolder ? "clickable" : "", tabindex: "0", "data-path": e.path,
-    onmousedown: (ev) => { if (ev.shiftKey) ev.preventDefault(); }, // no text selection on Shift+Click
-    onclick: (ev) => rowClick(ev, e),
-    oncontextmenu: (ev) => rowMenu(ev, e),
-  },
+  return el("li", pickRow(cloud, e, { class: isFolder ? "clickable" : "" }),
     box,
     el("span", { class: "icon" }, icon),
     el("div", { class: "grow" },
@@ -611,83 +601,120 @@ function openCloud(p) {
 
 // ---- selection and bulk actions ----
 
+// Selectable lists (Cloud files, Free up space) share these handlers. A list
+// ("picker") has: selected (key -> item), order (items as shown), anchor (key
+// ranges start from), list (the <ul> id), key(item), render() and, optionally,
+// open(item) for items a plain click opens instead of selecting.
+
 // Click: select only this item (folders open). Ctrl/Cmd+Click adds or removes
 // one item; Shift+Click selects from the anchor to this item.
-function rowClick(ev, e) {
+function rowClick(p, ev, x) {
   if (ev.target.closest("button, input, a")) return;
-  if (ev.shiftKey) selectRange(e, ev.ctrlKey || ev.metaKey);
-  else if (ev.ctrlKey || ev.metaKey) toggleOne(e);
-  else if (e.kind === "folder") openCloud(e.path);
-  else selectOnly(e);
+  if (ev.shiftKey) selectRange(p, x, ev.ctrlKey || ev.metaKey);
+  else if (ev.ctrlKey || ev.metaKey) toggleOne(p, x);
+  else if (!(p.open && p.open(x))) selectOnly(p, x);
 }
 
-function selectOnly(e) {
-  cloud.selected.clear();
-  cloud.selected.set(e.path, e);
-  cloud.anchor = e.path;
-  renderSelection();
+function selectOnly(p, x) {
+  p.selected.clear();
+  p.selected.set(p.key(x), x);
+  p.anchor = p.key(x);
+  p.render();
 }
 
-function toggleOne(e) {
-  if (cloud.selected.has(e.path)) cloud.selected.delete(e.path);
-  else { cloud.selected.set(e.path, e); cloud.anchor = e.path; }
-  renderSelection();
+function toggleOne(p, x) {
+  const k = p.key(x);
+  if (p.selected.has(k)) p.selected.delete(k);
+  else { p.selected.set(k, x); p.anchor = k; }
+  p.render();
 }
 
-// selectRange selects every item from the anchor to e, inclusive, in the
+function clearSelection(p) {
+  p.selected.clear();
+  p.anchor = null;
+  p.render();
+}
+
+// selectRange selects every item from the anchor to x, inclusive, in the
 // order shown, whether or not those rows are on screen. With add, the range is
 // added to the selection; otherwise it replaces it. With nothing selected the
 // first item is the anchor.
-function selectRange(e, add, anchor = cloud.anchor) {
-  const list = cloud.order;
-  let from = cloud.selected.size ? list.findIndex((x) => x.path === anchor) : -1;
+function selectRange(p, x, add) {
+  const list = p.order;
+  let from = p.selected.size ? list.findIndex((y) => p.key(y) === p.anchor) : -1;
   if (from < 0) from = 0;
-  const to = list.findIndex((x) => x.path === e.path);
+  const to = list.findIndex((y) => p.key(y) === p.key(x));
   if (to < 0 || !list.length) return;
-  cloud.anchor = list[from].path;
-  if (!add) cloud.selected.clear();
-  for (let i = Math.min(from, to); i <= Math.max(from, to); i++) cloud.selected.set(list[i].path, list[i]);
-  renderSelection();
+  p.anchor = p.key(list[from]);
+  if (!add) p.selected.clear();
+  for (let i = Math.min(from, to); i <= Math.max(from, to); i++) p.selected.set(p.key(list[i]), list[i]);
+  p.render();
+}
+
+// The row's checkbox: a plain click adds or removes the row, Shift+Click
+// adds the range from the anchor.
+function pickBox(p, x, name) {
+  let shift = false;
+  return el("input", {
+    type: "checkbox", class: "pick", "aria-label": `Select ${name}`, checked: p.selected.has(p.key(x)),
+    onclick: (ev) => { ev.stopPropagation(); shift = ev.shiftKey; },
+    onchange: (ev) => {
+      if (shift) selectRange(p, x, true);
+      else if (ev.target.checked !== p.selected.has(p.key(x))) toggleOne(p, x);
+    },
+  });
+}
+
+// Attributes that make an <li> a selectable row of picker p.
+function pickRow(p, x, attrs = {}) {
+  return {
+    ...attrs, tabindex: "0", "data-path": p.key(x),
+    onmousedown: (ev) => { if (ev.shiftKey) ev.preventDefault(); }, // no text selection on Shift+Click
+    onclick: (ev) => rowClick(p, ev, x),
+    oncontextmenu: (ev) => rowMenu(p, ev, x),
+  };
 }
 
 // Arrow keys move between rows; Shift+Up/Down grows or shrinks the range
 // from the anchor; Space toggles the row; Enter opens a folder.
-function cloudKeys(ev) {
+function listKeys(p, ev) {
   const li = ev.target.closest && ev.target.closest("li[data-path]");
   if (!li || ev.target !== li) return;
-  const i = cloud.order.findIndex((x) => x.path === li.dataset.path);
-  const e = cloud.order[i];
+  const i = p.order.findIndex((y) => p.key(y) === li.dataset.path);
+  const x = p.order[i];
+  if (!x) return;
   if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
-    const next = cloud.order[i + (ev.key === "ArrowDown" ? 1 : -1)];
+    const next = p.order[i + (ev.key === "ArrowDown" ? 1 : -1)];
     if (!next) return;
     ev.preventDefault();
     if (ev.shiftKey) {
-      if (!cloud.selected.size || !cloud.order.some((x) => x.path === cloud.anchor)) {
-        cloud.selected.set(e.path, e);
-        cloud.anchor = e.path;
+      if (!p.selected.size || !p.order.some((y) => p.key(y) === p.anchor)) {
+        p.selected.set(p.key(x), x);
+        p.anchor = p.key(x);
       }
-      selectRange(next, false);
+      selectRange(p, next, false);
     }
-    rowFor(next.path)?.focus();
+    rowFor(p, p.key(next))?.focus();
   } else if (ev.key === " ") {
     ev.preventDefault();
-    toggleOne(e);
-  } else if (ev.key === "Enter" && e.kind === "folder") {
-    openCloud(e.path);
+    toggleOne(p, x);
+  } else if (ev.key === "Enter" && p.open) {
+    p.open(x);
   }
 }
 
-function rowFor(path) {
-  return [...$("cloudList").children].find((li) => li.dataset.path === path);
+function rowFor(p, key) {
+  return [...$(p.list).children].find((li) => li.dataset.path === key);
 }
 
-// Right-click menu: "Select up to here" and, on a selected item, "Deselect".
-function rowMenu(ev, e) {
+// Right-click (long-press on the phone) menu: "Select up to here" and, on a
+// selected item, "Deselect".
+function rowMenu(p, ev, x) {
   ev.preventDefault();
   closeMenu();
-  const items = [el("button", { type: "button", onclick: () => { closeMenu(); selectRange(e, true); } }, "Select up to here")];
-  if (cloud.selected.has(e.path)) {
-    items.push(el("button", { type: "button", onclick: () => { closeMenu(); toggleOne(e); } }, "Deselect"));
+  const items = [el("button", { type: "button", onclick: () => { closeMenu(); selectRange(p, x, true); } }, "Select up to here")];
+  if (p.selected.has(p.key(x))) {
+    items.push(el("button", { type: "button", onclick: () => { closeMenu(); toggleOne(p, x); } }, "Deselect"));
   }
   const menu = el("div", { class: "ctxmenu", id: "ctxmenu", role: "menu" }, items);
   document.body.append(menu);
@@ -703,11 +730,55 @@ function closeMenu() {
   return false;
 }
 
+// Touch screens: holding a row for half a second opens the row menu, without
+// relying on the browser turning the long-press into a contextmenu event. The
+// touch that ends the press doesn't also select the row.
+function longPress(p) {
+  const list = $(p.list);
+  let timer = null, start = null, fired = false;
+  const cancel = () => { clearTimeout(timer); timer = null; };
+  list.addEventListener("touchstart", (ev) => {
+    const li = ev.target.closest("li[data-path]");
+    fired = false;
+    cancel();
+    if (!li || ev.touches.length !== 1 || ev.target.closest("button, input, a")) return;
+    const t = ev.touches[0];
+    start = { x: t.clientX, y: t.clientY };
+    timer = setTimeout(() => {
+      timer = null;
+      const x = p.order.find((y) => p.key(y) === li.dataset.path);
+      if (!x) return;
+      fired = true;
+      rowMenu(p, { preventDefault() {}, clientX: start.x, clientY: start.y }, x);
+    }, 500);
+  }, { passive: true });
+  list.addEventListener("touchmove", (ev) => {
+    const t = ev.touches[0];
+    if (timer && Math.hypot(t.clientX - start.x, t.clientY - start.y) > 10) cancel();
+  }, { passive: true });
+  list.addEventListener("touchend", (ev) => { cancel(); if (fired) ev.preventDefault(); });
+  list.addEventListener("touchcancel", cancel);
+  // The browser's own long-press menu, and a click that may follow, would
+  // undo ours.
+  list.addEventListener("contextmenu", (ev) => { if (fired) { ev.preventDefault(); ev.stopPropagation(); } }, true);
+  list.addEventListener("click", (ev) => { if (fired) { fired = false; ev.preventDefault(); ev.stopPropagation(); } }, true);
+}
+
+// replaceRows swaps in freshly rendered rows. The list reloads by itself while
+// backups run, so the focused row keeps focus (Shift+Up/Down carries on).
+function replaceRows(p, rows) {
+  const list = $(p.list);
+  const focused = list.contains(document.activeElement) && document.activeElement.closest("li[data-path]");
+  const key = focused && focused.dataset.path;
+  replace(list, rows);
+  if (key) rowFor(p, key)?.focus({ preventScroll: true });
+}
+
 // Marks selected rows and updates per-row buttons that act on the selection.
-function renderRows() {
-  const n = cloud.selected.size;
-  for (const li of $("cloudList").children) {
-    const on = cloud.selected.has(li.dataset.path);
+function renderRows(p) {
+  const n = p.selected.size;
+  for (const li of $(p.list).children) {
+    const on = p.selected.has(li.dataset.path);
     li.classList.toggle("selected", on);
     li.setAttribute("aria-selected", on ? "true" : "false");
     const box = li.querySelector(".pick");
@@ -719,7 +790,7 @@ function renderRows() {
 }
 
 function renderSelection() {
-  renderRows();
+  renderRows(cloud);
   const sel = [...cloud.selected.values()];
   const n = sel.length;
   const visible = cloud.entries.length;
@@ -944,7 +1015,14 @@ window.tgvaultRefresh = refreshCloud;
 
 // ---------- free up space ----------
 
-const space = { items: [], count: 0, bytes: 0, limit: 200, selected: new Map() };
+const space = {
+  items: [], count: 0, bytes: 0, limit: 200,
+  selected: new Map(), // cloud path -> recommendation
+  order: [], anchor: null, // as in cloud
+  list: "recList",
+  key: (r) => r.cloudPath,
+  render: () => renderSpaceSelection(),
+};
 
 async function loadSpace(all = false) {
   const qs = new URLSearchParams({ sort: $("recSort").value, type: $("recType").value, min: $("recMin").value, limit: all ? "0" : String(space.limit) });
@@ -962,12 +1040,12 @@ function renderSpace() {
   $("spaceSummary").textContent = space.count
     ? `${space.count.toLocaleString()} file${space.count > 1 ? "s" : ""} (${bytes(space.bytes)}) on ${here} are safely backed up and could be deleted here.`
     : `Nothing to suggest right now: no file on ${here} matching these filters has an up-to-date backup yet.`;
-  replace($("recList"), space.items.map((r) => {
+  space.order = space.items;
+  replaceRows(space, space.items.map((r) => {
     const name = r.cloudPath.slice(r.cloudPath.lastIndexOf("/") + 1);
     const folder = r.cloudPath.slice(0, r.cloudPath.lastIndexOf("/"));
-    return el("li", {},
-      el("input", { type: "checkbox", class: "pick", "aria-label": `Select ${name}`, checked: space.selected.has(r.cloudPath),
-        onchange: (ev) => { if (ev.target.checked) space.selected.set(r.cloudPath, r); else space.selected.delete(r.cloudPath); renderSpaceSelection(); } }),
+    return el("li", pickRow(space, r),
+      pickBox(space, r, name),
       el("span", { class: "icon" }, typeIcons[r.type] || "📄"),
       el("div", { class: "grow" },
         el("div", { class: "name" }, name),
@@ -979,6 +1057,7 @@ function renderSpace() {
 }
 
 function renderSpaceSelection() {
+  renderRows(space);
   const sel = [...space.selected.values()];
   const total = sel.reduce((s, r) => s + r.size, 0);
   $("recAll").checked = space.count > 0 && sel.length === space.count;
@@ -1134,18 +1213,19 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   $("cloudRefresh").addEventListener("click", () => refreshCloud(true));
   $("selAll").addEventListener("change", (ev) => selectAll(ev.target.checked));
-  $("cloudList").addEventListener("keydown", cloudKeys);
+  for (const p of [cloud, space]) {
+    $(p.list).addEventListener("keydown", (ev) => listKeys(p, ev));
+    longPress(p);
+  }
   document.addEventListener("click", (ev) => { if (!ev.target.closest("#ctxmenu")) closeMenu(); });
   addEventListener("scroll", closeMenu, true);
   addEventListener("blur", closeMenu);
   document.addEventListener("keydown", (ev) => {
     if (ev.key !== "Escape" || $("dlg").open) return;
     if (closeMenu()) return;
-    if ($("cloudList").closest("[data-panel]").hidden || !cloud.selected.size) return;
     if (ev.target.matches && ev.target.matches("input:not([type=checkbox]), select, textarea")) return; // e.g. clearing the search box
-    cloud.selected.clear();
-    cloud.anchor = null;
-    renderSelection();
+    const p = [cloud, space].find((p) => !$(p.list).closest("[data-panel]").hidden);
+    if (p && p.selected.size) clearSelection(p);
   });
   // Free up space.
   for (const id of ["recSort", "recType", "recMin"]) $(id).addEventListener("change", () => { space.selected.clear(); loadSpace(); });

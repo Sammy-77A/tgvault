@@ -207,6 +207,8 @@ label.inline { display: inline-flex; align-items: center; gap: .4rem; margin: 0;
 .files li[data-path]:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .files li.selected { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
 .files li.selected + li.selected { border-top-color: transparent; }
+/* Holding a row opens its menu; don't start selecting text instead. */
+.phone .files li[data-path] { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 .ctxmenu {
   position: fixed; z-index: 50; min-width: 11rem; padding: .25rem;
   background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
