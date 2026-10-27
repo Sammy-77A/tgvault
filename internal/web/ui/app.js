@@ -58,7 +58,8 @@ function toast(msg) {
   t.textContent = msg;
   t.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { t.hidden = true; }, 4000);
+  // Long messages (usually errors) stay up long enough to read.
+  toastTimer = setTimeout(() => { t.hidden = true; }, Math.min(12000, 4000 + msg.length * 50));
 }
 
 function replace(node, ...children) {
@@ -521,7 +522,12 @@ async function loadCloud() {
     } else {
       data = await api(`/api/cloud?path=${encodeURIComponent(cloudPath)}`);
     }
-  } catch (err) { toast(err.message); return; }
+  } catch (err) {
+    // Kept on the page too: a toast is gone after a few seconds.
+    $("cloudInfo").textContent = `Couldn't load these files: ${err.message}`;
+    toast(err.message);
+    return;
+  }
   cloud.entries = data.entries || [];
   cloud.total = data.total || cloud.entries.length;
   cloud.stamp = state ? state.cloudStamp : "";
@@ -1309,7 +1315,11 @@ const space = {
 async function loadSpace(all = false) {
   const qs = new URLSearchParams({ sort: $("recSort").value, type: $("recType").value, min: $("recMin").value, limit: all ? "0" : String(space.limit) });
   let data;
-  try { data = await api(`/api/recommendations?${qs}`); } catch (err) { toast(err.message); return; }
+  try { data = await api(`/api/recommendations?${qs}`); } catch (err) {
+    $("spaceSummary").textContent = `Couldn't load suggestions: ${err.message}`;
+    toast(err.message);
+    return;
+  }
   space.items = data.items;
   space.count = data.count;
   space.bytes = data.bytes;

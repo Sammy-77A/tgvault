@@ -152,6 +152,7 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
 .toast {
   position: fixed; left: 50%; bottom: 1.2rem; transform: translateX(-50%);
   background: var(--text); color: var(--bg); padding: .6rem 1rem; border-radius: 8px; max-width: calc(100vw - 2rem);
+  z-index: 20;
 }
 
 @media (max-width: 600px) {
@@ -179,6 +180,7 @@ dl.pair dd { margin: 0; font-weight: 700; font-size: 1.25rem; letter-spacing: .0
 .phone .list li { flex-wrap: wrap; }
 .phone .list li .actions { flex-basis: 100%; justify-content: flex-start; }
 .phone main { padding-bottom: 4.5rem; }
+.phone .toast { bottom: calc(4.5rem + env(safe-area-inset-bottom)); } /* above the tab bar */
 .phone .tabs {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; margin: 0;
   background: var(--card); border-top: 1px solid var(--line); border-bottom: 0;
