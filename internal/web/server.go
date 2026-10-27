@@ -3,8 +3,10 @@ package web
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -29,6 +31,21 @@ import (
 var uiFiles embed.FS
 
 const cookieName = "tgvault"
+
+// uiVersion changes whenever the page's files do. An open page compares it
+// with the one it loaded with and reloads itself after an update.
+var uiVersion = func() string {
+	h := sha256.New()
+	_ = fs.WalkDir(uiFiles, "ui", func(p string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			b, _ := uiFiles.ReadFile(p)
+			h.Write([]byte(p))
+			h.Write(b)
+		}
+		return nil
+	})
+	return hex.EncodeToString(h.Sum(nil))[:12]
+}()
 
 // Server is the local web interface.
 type Server struct {
@@ -114,7 +131,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) routes() {
 	sub, _ := fs.Sub(uiFiles, "ui")
-	s.mux.Handle("GET /", http.FileServerFS(sub))
+	files := http.FileServerFS(sub)
+	// Always revalidate, so an update never runs next to an old app.js.
+	s.mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
+		files.ServeHTTP(w, r)
+	})
 
 	s.mux.HandleFunc("GET /api/state", s.state)
 	s.mux.HandleFunc("POST /api/setup", s.setup)
@@ -233,6 +255,7 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, map[string]any{
 		"version":    s.version,
+		"ui":         uiVersion,
 		"telegram":   s.tg.Info(),
 		"engine":     s.eng.Status(),
 		"roots":      roots,

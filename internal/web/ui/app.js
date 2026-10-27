@@ -103,6 +103,8 @@ let state = null;
 let tab = "overview";
 let cloudPath = "";
 
+let loadedUI = null;
+
 async function refresh() {
   try {
     state = await api("/api/state");
@@ -111,6 +113,9 @@ async function refresh() {
     $("conn").className = "conn warn";
     return;
   }
+  // tgvault was updated while this page stayed open: load the new page.
+  if (loadedUI && state.ui && state.ui !== loadedUI) { location.reload(); return; }
+  loadedUI = state.ui;
   render();
   maybeReloadCloud();
   reportFinishedTasks();
