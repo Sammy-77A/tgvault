@@ -451,6 +451,12 @@ func (s *Store) MarkGone(ids []int64) error {
 	return nil
 }
 
+// overdueRetry is how long past its retry time a failed item may wait behind
+// pending ones. Failed items otherwise go last (one that keeps failing must
+// not hold up the rest), but with thousands of files pending they would wait
+// for hours.
+const overdueRetry = 10 * time.Minute
+
 // ClaimNext picks the next item ready to upload and marks it uploading.
 // quietFile/quietProject are how long an item must be unchanged first.
 func (s *Store) ClaimNext(quietFile, quietProject time.Duration) (Item, bool, error) {
@@ -459,8 +465,9 @@ func (s *Store) ClaimNext(quietFile, quietProject time.Duration) (Item, bool, er
 		WHERE local_present=1 AND state IN (?,?) AND next_attempt<=?
 		  AND changed_at <= CASE kind WHEN ? THEN ? ELSE ? END
 		  AND root_id IN (SELECT id FROM roots WHERE paused=0)
-		ORDER BY state=? , changed_at LIMIT 1`,
-		StatePending, StateFailed, t, KindProject, t-int64(quietProject.Seconds()), t-int64(quietFile.Seconds()), StateFailed))
+		ORDER BY CASE WHEN state=? AND next_attempt<=? THEN 0 ELSE 1 END, state=?, changed_at LIMIT 1`,
+		StatePending, StateFailed, t, KindProject, t-int64(quietProject.Seconds()), t-int64(quietFile.Seconds()),
+		StateFailed, t-int64(overdueRetry.Seconds()), StateFailed))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Item{}, false, nil
 	}

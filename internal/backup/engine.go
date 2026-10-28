@@ -480,7 +480,9 @@ func (e *Engine) failure(ctx context.Context, err error) outcome {
 	if errors.Is(context.Cause(ctx), errStalled) {
 		return outcome{state: store.StateFailed, note: "the upload stopped making progress (connection problem?); will try again", count: true}
 	}
-	if isConnErr(err) {
+	// "context canceled" without our own context ending means the Telegram
+	// client was restarted under the upload (a network change, a new login).
+	if isConnErr(err) || (ctx.Err() == nil && strings.Contains(strings.ToLower(err.Error()), "context canceled")) {
 		return outcome{state: store.StateFailed, retry: 30 * time.Second, note: "the connection to Telegram dropped; will try again"}
 	}
 	if isInUse(err) {
@@ -494,7 +496,8 @@ func (e *Engine) failure(ctx context.Context, err error) outcome {
 
 func isConnErr(err error) bool {
 	msg := strings.ToLower(err.Error())
-	for _, s := range []string{"connection was aborted", "connection reset", "broken pipe", "i/o timeout", "eof", "connection refused", "no such host"} {
+	for _, s := range []string{"connection was aborted", "connection reset", "broken pipe", "i/o timeout", "eof", "connection refused", "no such host",
+		"forcibly closed", "client closed", "retry limit reached"} {
 		if strings.Contains(msg, s) {
 			return true
 		}
