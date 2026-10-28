@@ -94,3 +94,49 @@ func equal(a, b []string) bool {
 	}
 	return true
 }
+
+func TestShareDirsKeepRunningRequestsFiles(t *testing.T) {
+	base := t.TempDir()
+	s := &Server{phone: &Phone{ShareDir: base}}
+	if err := os.WriteFile(filepath.Join(base, "old-leftover.mp4"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	first, releaseFirst, err := s.newShareDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(base, "old-leftover.mp4")); err == nil {
+		t.Fatal("leftovers of older versions should be cleaned up")
+	}
+	tmp := filepath.Join(first, ".restore-1.tgvault-tmp")
+	if err := os.WriteFile(tmp, []byte("half a download"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// A second tap while the first file is still being prepared.
+	second, releaseSecond, err := s.newShareDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second == first {
+		t.Fatal("each request needs its own folder")
+	}
+	if _, err := os.Stat(tmp); err != nil {
+		t.Fatalf("the running download's file was deleted: %v", err)
+	}
+
+	// Once both are done, the next request keeps only itself.
+	releaseFirst()
+	releaseFirst() // releasing twice is harmless
+	releaseSecond()
+	third, release, err := s.newShareDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	entries, _ := os.ReadDir(base)
+	if len(entries) != 1 || filepath.Join(base, entries[0].Name()) != third {
+		t.Fatalf("only the latest folder should remain, got %v", entries)
+	}
+}

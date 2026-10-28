@@ -61,6 +61,7 @@ type Server struct {
 	notify  *notify.Watcher
 	pairing *pair.Listener // set on devices that can be logged in from the PC
 	phone   *Phone         // set when running on a phone
+	shares  shareDirs      // folders for files being shared or opened (phone)
 }
 
 // SetPairing shows the "log in from your PC" details while logged out.

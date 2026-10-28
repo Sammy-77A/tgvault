@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Sammy-77A/tgvault/internal/backup"
 )
@@ -63,6 +64,50 @@ func (p *Phone) permissions() PhonePermissions {
 
 // DownloadDir is where the phone saves files from the Cloud screen.
 func (p *Phone) DownloadDir() string { return filepath.Join(p.StorageRoot, "Download", "tgvault") }
+
+// shareDirs gives each "share" or "open with" its own folder inside the share
+// folder. Only the latest one is kept, but a folder is never removed while its
+// files are still being prepared: wiping the whole folder at the start of every
+// request deleted the temporary file of a download that was still running (a
+// second tap on Open with…), which then failed with "no such file or directory".
+type shareDirs struct {
+	mu   sync.Mutex
+	busy map[string]bool
+	seq  int
+}
+
+// newShareDir removes the folders of finished requests and returns a fresh
+// one. Call release once the files have been written, or the request failed.
+func (s *Server) newShareDir() (dir string, release func(), err error) {
+	base := s.phone.ShareDir
+	sd := &s.shares
+	sd.mu.Lock()
+	defer sd.mu.Unlock()
+	if sd.busy == nil {
+		sd.busy = map[string]bool{}
+	}
+	entries, _ := os.ReadDir(base)
+	for _, e := range entries {
+		if !sd.busy[e.Name()] {
+			_ = os.RemoveAll(filepath.Join(base, e.Name())) // also leftovers from older versions
+		}
+	}
+	sd.seq++
+	name := fmt.Sprintf("%d-%d", time.Now().Unix(), sd.seq)
+	dir = filepath.Join(base, name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", nil, err
+	}
+	sd.busy[name] = true
+	var once sync.Once
+	return dir, func() {
+		once.Do(func() {
+			sd.mu.Lock()
+			delete(sd.busy, name)
+			sd.mu.Unlock()
+		})
+	}, nil
+}
 
 // SetPhone enables the phone-only parts of the page.
 func (s *Server) SetPhone(p *Phone) { s.phone = p }
