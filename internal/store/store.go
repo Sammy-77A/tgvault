@@ -99,7 +99,9 @@ type Store struct {
 
 // Open opens (and creates if needed) the database at path.
 func Open(path string) (*Store, error) {
-	dsn := fmt.Sprintf("file:%s?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)", path)
+	// temp_store(2) keeps sorting and grouping scratch space in memory: Android has
+	// no temp folder SQLite can find, and fails with "disk I/O error (6410)".
+	dsn := fmt.Sprintf("file:%s?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=temp_store(2)", path)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
