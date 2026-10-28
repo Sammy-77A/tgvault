@@ -498,7 +498,9 @@ async function pickFolderOnPhone(title = "Choose a folder to back up", button = 
   // Shown once the dialog is open: what the list really contains and how big it is.
   setTimeout(() => {
     const b = list.getBoundingClientRect();
-    console.info(`folder picker: ${list.children.length} rows, list ${Math.round(b.width)}x${Math.round(b.height)}, viewport ${innerWidth}x${innerHeight}, first row "${list.firstElementChild ? list.firstElementChild.textContent.slice(0, 40) : ""}"`);
+    const msg = `${list.children.length} rows, list ${Math.round(b.width)}x${Math.round(b.height)}, viewport ${innerWidth}x${innerHeight}`;
+    console.info("folder picker: " + msg);
+    if (b.height < 20) chosen.append(el("div", { class: "sub" }, "Diagnostic: " + msg)); // the list is invisible; show why
   }, 600);
   await dialog({
     title,
