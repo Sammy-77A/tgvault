@@ -220,7 +220,19 @@ body.viewing { overflow: hidden; }
 .viewer .vtitle .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .viewer .vtitle .sub { color: #a7b1ad; font-size: .85rem; }
 .viewer .vactions { display: flex; gap: .4rem; flex: none; }
-.viewer .vbody { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: auto; padding: 1rem; }
+.viewer .vbody { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: auto; padding: 1rem; position: relative; }
+.viewer .vwait {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 2; pointer-events: none;
+  display: flex; flex-direction: column; align-items: center; gap: .6rem; max-width: min(90%, 22rem); text-align: center;
+  background: rgba(11, 13, 12, .78); padding: 1rem 1.25rem; border-radius: 12px; color: #eef1ef;
+}
+.viewer .vwait[hidden] { display: none; }
+.viewer .spin {
+  width: 2rem; height: 2rem; border: 3px solid #3a4440; border-top-color: #5fb39a; border-radius: 50%;
+  animation: vspin .8s linear infinite;
+}
+@keyframes vspin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .viewer .spin { animation-duration: 2.4s; } }
 .viewer img.fit { max-width: 100%; max-height: 100%; object-fit: contain; cursor: zoom-in; }
 .viewer img:not(.fit) { cursor: zoom-out; align-self: flex-start; }
 .viewer video { max-width: 100%; max-height: 100%; background: #000; }

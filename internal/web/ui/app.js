@@ -1163,7 +1163,8 @@ function renderViewer() {
     ? el("button", { type: "button", class: "small", onclick: () => bulkDownload([e]) }, "Download")
     : el("a", { class: "btn small", href: `/api/download?msg=${msgId}` }, "Download");
   const openWith = onPhone ? el("button", { type: "button", class: "small", onclick: () => openWithApp(e) }, "Open with…") : null;
-  const body = el("div", { class: "vbody" }, viewContent(e, kind, src, msgId));
+  const wait = waitNotice(e.size);
+  const body = el("div", { class: "vbody" }, viewContent(e, kind, src, msgId, wait), wait.node);
   const box = el("div", { class: "viewer", id: "viewer", role: "dialog", "aria-modal": "true", "aria-label": `Preview of ${e.name}`, tabindex: "-1" },
     el("div", { class: "vbar" },
       el("div", { class: "vtitle" }, el("div", { class: "name" }, e.name),
@@ -1179,7 +1180,29 @@ function renderViewer() {
   if (!keepFocus || !box.contains(document.activeElement)) box.focus();
 }
 
-function viewContent(e, kind, src, msgId) {
+// waitNotice is the spinner shown while a preview loads. The file is fetched
+// from Telegram first, so a big one can take a while: after a few seconds it
+// says so. on() shows it, off() hides it.
+function waitNotice(size) {
+  const text = el("span", { class: "vwait-text" }, "Loading…");
+  const node = el("div", { class: "vwait", role: "status", "aria-live": "polite", hidden: true },
+    el("span", { class: "spin", "aria-hidden": "true" }), text);
+  let slow = null;
+  return {
+    node,
+    on() {
+      node.hidden = false;
+      text.textContent = "Loading…";
+      clearTimeout(slow);
+      slow = setTimeout(() => {
+        text.textContent = `Still loading… the file is fetched from Telegram first${size > 50 << 20 ? ", and this one is big" : ""}.`;
+      }, 4000);
+    },
+    off() { clearTimeout(slow); node.hidden = true; },
+  };
+}
+
+function viewContent(e, kind, src, msgId, wait) {
   const card = (why) => el("div", { class: "vcard" },
     el("div", { class: "vicon" }, typeIcons[e.type] || "📄"),
     el("p", {}, why),
@@ -1191,13 +1214,19 @@ function viewContent(e, kind, src, msgId) {
       img.style.backgroundImage = `url("/api/thumb?msg=${msgId}")`;
       img.addEventListener("load", () => { img.classList.remove("loading"); img.style.backgroundImage = ""; }, { once: true });
     }
+    wait.on();
+    img.addEventListener("load", wait.off, { once: true });
     img.addEventListener("click", () => img.classList.toggle("fit"));
+    img.addEventListener("error", () => wait.off());
     img.addEventListener("error", () => img.replaceWith(card("This picture can't be shown here (it may be in a format the browser doesn't read).")));
     return img;
   }
   if (kind === "video" || kind === "audio") {
     // On the phone nothing is fetched until you press play.
     const media = el(kind, { src, controls: true, preload: onPhone ? "none" : "metadata", playsinline: true });
+    // Shown while the player waits for data (on the phone, from pressing play).
+    for (const ev of ["loadstart", "waiting", "seeking"]) media.addEventListener(ev, wait.on);
+    for (const ev of ["loadeddata", "canplay", "playing", "error", "abort", "emptied"]) media.addEventListener(ev, wait.off);
     media.addEventListener("error", () => media.replaceWith(card(`This ${kind === "video" ? "video" : "recording"} can't play here: its format isn't supported by ${onPhone ? "this phone" : "this browser"}.`)));
     if (kind === "video") {
       // Some videos (often x265/HEVC) play their sound but no picture here.
@@ -1219,8 +1248,9 @@ function viewContent(e, kind, src, msgId) {
       el("a", { class: "btn primary", href: src, target: "_blank", rel: "noopener" }, "Open the PDF in a new tab"));
   }
   if (kind === "text") {
-    const pre = el("pre", { class: "vtext" }, "Loading…");
-    loadText(pre, src, e.size);
+    const pre = el("pre", { class: "vtext" });
+    wait.on();
+    loadText(pre, src, e.size).finally(wait.off);
     return pre;
   }
   return card(`${e.name} can't be previewed here.`);
