@@ -6,12 +6,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gotd/td/bin"
@@ -375,7 +378,7 @@ func (c *Client) runOnce(ctx context.Context, id int, hash string) error {
 			SystemLangCode: "en",
 			LangCode:       "en",
 		},
-		Middlewares: []telegram.Middleware{telegram.MiddlewareFunc(c.floodWaiter)},
+		Middlewares: []telegram.Middleware{telegram.MiddlewareFunc(c.floodWaiter), telegram.MiddlewareFunc(c.retryStale)},
 		OnConnectionState: func(s telegram.ConnectionState) {
 			c.mu.Lock()
 			c.online = s == telegram.ConnectionStateReady
@@ -475,6 +478,78 @@ func (c *Client) floodWaiter(next tg.Invoker) telegram.InvokeFunc {
 				return ctx.Err()
 			case <-time.After(d + time.Second):
 			}
+		}
+	}
+}
+
+// staleRetries and staleDelay control retryStale: how often a request is sent
+// again after the connection turned out to be dead, and the wait before that.
+var (
+	staleRetries = 3
+	staleDelay   = 700 * time.Millisecond
+)
+
+// staleConn reports whether err is the connection itself failing (a socket
+// the network or Android closed behind our back), not a reply from Telegram.
+func staleConn(err error) bool {
+	if err == nil || tgerr.Is(err) {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	if errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNABORTED) ||
+		errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	s := err.Error()
+	for _, frag := range []string{"broken pipe", "connection reset", "connection aborted", "use of closed network connection",
+		"forcibly closed", "wsasend", "wsarecv"} {
+		if strings.Contains(s, frag) {
+			return true
+		}
+	}
+	return false
+}
+
+// retryStale sends a request again when the connection under it had silently
+// died ("write: broken pipe"). gotd opens a new connection by itself, but the
+// request that found the old one dead is returned as an error; retrying it a
+// moment later, once the new connection is up, makes that invisible. The same
+// request is sent, so Telegram sees the same random ID and never stores a
+// message twice.
+func (c *Client) retryStale(next tg.Invoker) telegram.InvokeFunc {
+	return func(ctx context.Context, input bin.Encoder, output bin.Decoder) error {
+		for attempt := 0; ; attempt++ {
+			err := next.Invoke(ctx, input, output)
+			if attempt >= staleRetries || ctx.Err() != nil || !staleConn(err) {
+				return err
+			}
+			log.Printf("telegram: the connection had gone stale (%v); retrying (%d of %d)", err, attempt+1, staleRetries)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(staleDelay * time.Duration(attempt+1)):
+			}
+			c.waitOnline(ctx, 10*time.Second)
+		}
+	}
+}
+
+// waitOnline waits until gotd reports a working connection, for at most max.
+func (c *Client) waitOnline(ctx context.Context, max time.Duration) {
+	deadline := time.Now().Add(max)
+	for time.Now().Before(deadline) {
+		c.mu.Lock()
+		on := c.online
+		c.mu.Unlock()
+		if on {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(200 * time.Millisecond):
 		}
 	}
 }
