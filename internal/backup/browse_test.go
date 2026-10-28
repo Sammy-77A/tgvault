@@ -76,18 +76,41 @@ func TestRecommendationsOnlyUpToDateFiles(t *testing.T) {
 		addVersion(t, st, 10+i, it.CloudPath, size, it.Mtime)
 		st.FinishItem(it.ID, store.StateSynced, "", 0, 0, later)
 	}
-	recs, err := e.Recommendations(0, "", false)
+	recs, err := e.Recommendations(0, "", false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(recs) != 2 || recs[0].CloudPath != "R/big.mp4" || recs[1].CloudPath != "R/small.jpg" {
 		t.Fatalf("want big.mp4 then small.jpg, got %+v", recs)
 	}
-	if recs, _ := e.Recommendations(1000, "", false); len(recs) != 1 {
+	if recs, _ := e.Recommendations(1000, "", false, 0, 0); len(recs) != 1 {
 		t.Fatalf("minimum size: %+v", recs)
 	}
-	if recs, _ := e.Recommendations(0, "image", false); len(recs) != 1 || recs[0].Type != "image" {
+	if recs, _ := e.Recommendations(0, "image", false, 0, 0); len(recs) != 1 || recs[0].Type != "image" {
 		t.Fatalf("type filter: %+v", recs)
+	}
+	// Date range: by the file's last modified time; "to" is exclusive.
+	has := func(from, to int64, path string) bool {
+		rs, err := e.Recommendations(0, "", false, from, to)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range rs {
+			if r.CloudPath == path {
+				return true
+			}
+		}
+		return false
+	}
+	mt := recs[0].Mtime
+	if !has(mt, mt+1, recs[0].CloudPath) || !has(0, 0, recs[0].CloudPath) {
+		t.Fatal("a range around the file's time must include it")
+	}
+	if has(mt+1, 0, recs[0].CloudPath) {
+		t.Fatal("from: a file modified before it must be left out")
+	}
+	if has(0, mt, recs[0].CloudPath) {
+		t.Fatal("to is exclusive: a file modified at it must be left out")
 	}
 	plan, err := e.PlanFreeMany([]string{"R/big.mp4", "R/small.jpg", "R"})
 	if err != nil || len(plan.Candidates) != 2 {

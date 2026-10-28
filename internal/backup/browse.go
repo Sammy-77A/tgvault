@@ -309,9 +309,10 @@ type Recommendation struct {
 }
 
 // Recommendations lists files whose backup matches the file on this device,
-// largest first (or oldest first with byAge). Only files are offered; code
-// projects are freed from the Cloud screen.
-func (e *Engine) Recommendations(minSize int64, typ string, byAge bool) ([]Recommendation, error) {
+// largest first (or oldest first with byAge). from and to bound the file's last
+// modified time (Unix seconds; to is exclusive; 0 means no limit). Only files
+// are offered; code projects are freed from the Cloud screen.
+func (e *Engine) Recommendations(minSize int64, typ string, byAge bool, from, to int64) ([]Recommendation, error) {
 	items, err := e.st.LocalBackedUp()
 	if err != nil {
 		return nil, err
@@ -329,6 +330,9 @@ func (e *Engine) Recommendations(minSize int64, typ string, byAge bool) ([]Recom
 		v, ok := byPath[it.CloudPath]
 		// Up to date: the backup is the same size and no older than the file's last change.
 		if !ok || v.Size != it.Size || v.Mtime != it.Mtime || it.Size < minSize {
+			continue
+		}
+		if (from > 0 && it.Mtime < from) || (to > 0 && it.Mtime >= to) {
 			continue
 		}
 		t := meta.FileType(it.CloudPath)

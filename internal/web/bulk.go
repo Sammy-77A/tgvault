@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -13,6 +14,24 @@ import (
 
 	"github.com/Sammy-77A/tgvault/internal/backup"
 )
+
+// dateRange reads the from and to days (YYYY-MM-DD, local time) of a request
+// as Unix seconds; to is exclusive and includes the whole "to" day. 0 means
+// no limit.
+func dateRange(q url.Values) (from, to int64) {
+	day := func(key string) int64 {
+		t, err := time.ParseInLocation("2006-01-02", q.Get(key), time.Local)
+		if err != nil {
+			return 0
+		}
+		return t.Unix()
+	}
+	from, to = day("from"), day("to")
+	if to > 0 {
+		to += 24 * 3600
+	}
+	return from, to
+}
 
 // search finds files by name, type and date under the current folder.
 func (s *Server) search(w http.ResponseWriter, r *http.Request) {
@@ -22,23 +41,13 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "bad path")
 		return
 	}
-	day := func(key string) int64 {
-		t, err := time.ParseInLocation("2006-01-02", q.Get(key), time.Local)
-		if err != nil {
-			return 0
-		}
-		return t.Unix()
-	}
-	to := day("to")
-	if to > 0 {
-		to += 24 * 3600 // include the whole "to" day
-	}
+	from, to := dateRange(q)
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	if limit <= 0 {
 		limit = 500
 	}
 	entries, total, err := s.eng.Search(backup.Query{Prefix: prefix, Text: q.Get("q"), Type: q.Get("type"),
-		From: day("from"), To: to, Limit: limit})
+		From: from, To: to, Limit: limit})
 	if err != nil {
 		fail(w, 500, err.Error())
 		return
@@ -209,7 +218,8 @@ func (s *Server) bulkZip(w http.ResponseWriter, r *http.Request) {
 func (s *Server) recommendations(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	minSize, _ := strconv.ParseInt(q.Get("min"), 10, 64)
-	recs, err := s.eng.Recommendations(minSize, q.Get("type"), q.Get("sort") == "age")
+	from, to := dateRange(q)
+	recs, err := s.eng.Recommendations(minSize, q.Get("type"), q.Get("sort") == "age", from, to)
 	if err != nil {
 		fail(w, 500, err.Error())
 		return

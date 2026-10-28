@@ -1313,7 +1313,7 @@ const space = {
 };
 
 async function loadSpace(all = false) {
-  const qs = new URLSearchParams({ sort: $("recSort").value, type: $("recType").value, min: $("recMin").value, limit: all ? "0" : String(space.limit) });
+  const qs = new URLSearchParams({ sort: $("recSort").value, type: $("recType").value, min: $("recMin").value, from: $("recFrom").value, to: $("recTo").value, limit: all ? "0" : String(space.limit) });
   let data;
   try { data = await api(`/api/recommendations?${qs}`); } catch (err) {
     $("spaceSummary").textContent = `Couldn't load suggestions: ${err.message}`;
@@ -1527,7 +1527,9 @@ document.addEventListener("DOMContentLoaded", () => {
     if (p && p.selected.size) clearSelection(p);
   });
   // Free up space.
-  for (const id of ["recSort", "recType", "recMin"]) $(id).addEventListener("change", () => { space.selected.clear(); loadSpace(); });
+  for (const id of ["recSort", "recType", "recMin", "recFrom", "recTo"]) $(id).addEventListener("change", () => { space.selected.clear(); loadSpace(); });
+  $("recDates").addEventListener("click", () => { $("recDateRow").hidden = !$("recDateRow").hidden; });
+  $("recClear").addEventListener("click", () => { $("recFrom").value = ""; $("recTo").value = ""; space.selected.clear(); loadSpace(); });
   $("recMore").addEventListener("click", () => { space.limit += 500; loadSpace(); });
   $("recAll").addEventListener("change", (ev) => selectAllSpace(ev.target.checked));
   $("recDelete").addEventListener("click", deleteRecommended);

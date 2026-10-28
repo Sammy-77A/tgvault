@@ -11,7 +11,7 @@ A lightweight backup app that keeps your folders safe in your own Telegram accou
 - **Code projects are one ZIP.** Folders with a `.git`, `package.json`, `composer.json`, `go.mod` and similar are offered as *projects*. Once you confirm, each project is backed up a few minutes after you stop editing: now and then as a full ZIP, and in between as small change ZIPs holding only what changed (see [Projects](#projects)). Rebuildable folders (`node_modules`, and `vendor`, `target`, `build`, virtualenvs when the project type makes that certain) are left out. `.git` and `.env` are kept.
 - **No stuck syncs.** Each file is its own job. A file that fails retries on its own schedule with the reason shown next to it, and everything else keeps going. Telegram "slow down" requests only pause what they affect.
 - **Versions.** Edited files are uploaded as new versions; the last 3 are kept. Every backup of a project is a version you can restore.
-- **Free up space.** Deletes local copies only after re-checking that the Telegram copy exists and matches.
+- **Free up space.** Deletes local copies only after re-checking that the Telegram copy exists and matches. The suggestions can be narrowed by type, size and the date a file was last modified (**Dates…**).
 - **Restore never overwrites.** If a different file is already in the way, the restored copy gets "(restored)" in its name.
 
 Files go straight between your PC and Telegram. There is no tgvault server, no ads and no telemetry.
