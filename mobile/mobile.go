@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -141,6 +142,27 @@ func SetPermissions(storage, notifications, battery bool) {
 	if a := current(); a != nil {
 		a.SetPermissions(web.PhonePermissions{Storage: storage, Notifications: notifications, Battery: battery})
 	}
+}
+
+// SetVolumes passes the phone's storages, one per line as
+// "label<TAB>path<TAB>free bytes<TAB>total bytes", for choosing folders to
+// back up. Lines that don't fit that shape are ignored.
+func SetVolumes(volumes string) {
+	a := current()
+	if a == nil {
+		return
+	}
+	var out []web.Volume
+	for _, line := range strings.Split(volumes, "\n") {
+		f := strings.Split(line, "\t")
+		if len(f) != 4 || f[0] == "" || f[1] == "" {
+			continue
+		}
+		free, _ := strconv.ParseInt(f[2], 10, 64)
+		total, _ := strconv.ParseInt(f[3], 10, 64)
+		out = append(out, web.Volume{Label: f[0], Path: f[1], Free: free, Total: total})
+	}
+	a.SetVolumes(out)
 }
 
 // WifiOnly reports whether backups should wait for Wi-Fi.

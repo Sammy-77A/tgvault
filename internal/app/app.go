@@ -143,6 +143,14 @@ func (a *App) SetPermissions(p web.PhonePermissions) {
 	}
 }
 
+// SetVolumes tells the page which storages the phone has (internal storage,
+// memory cards), for choosing folders.
+func (a *App) SetVolumes(v []web.Volume) {
+	if a.phone != nil {
+		a.phone.SetVolumes(v)
+	}
+}
+
 // WifiOnly reports whether the phone should back up only on Wi-Fi (the default).
 func (a *App) WifiOnly() bool { return a.st.Get(backup.SettingWifiOnly) != "off" }
 

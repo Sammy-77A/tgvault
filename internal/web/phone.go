@@ -21,8 +21,24 @@ type Phone struct {
 	Share       func(paths []string) // opens Android's share sheet
 	Open        func(path string)    // opens a file in another app ("Open with…")
 
-	mu    sync.Mutex
-	perms PhonePermissions
+	mu      sync.Mutex
+	perms   PhonePermissions
+	volumes []Volume
+}
+
+// Volume is one storage of the phone: its internal storage or a memory card.
+type Volume struct {
+	Label string `json:"label"`
+	Path  string `json:"path"`
+	Free  int64  `json:"free"`
+	Total int64  `json:"total"`
+}
+
+// SetVolumes records the phone's storages, as Android reports them.
+func (p *Phone) SetVolumes(v []Volume) {
+	p.mu.Lock()
+	p.volumes = v
+	p.mu.Unlock()
 }
 
 // PhonePermissions are the Android permissions tgvault asks for.
@@ -139,10 +155,14 @@ func (s *Server) suggestFolders(w http.ResponseWriter, r *http.Request) {
 }
 
 // browse lists the subfolders of a folder, for picking folders on the phone.
+// With no path it lists the phone's storages (internal storage, memory cards).
+// Folders whose names start with a dot are listed only with hidden=1.
 func (s *Server) browse(w http.ResponseWriter, r *http.Request) {
+	vols := s.volumes()
 	p := r.URL.Query().Get("path")
 	if p == "" {
-		p = s.browseStart()
+		writeJSON(w, map[string]any{"path": "", "top": true, "dirs": []string{}, "volumes": vols})
+		return
 	}
 	p = filepath.Clean(p)
 	entries, err := os.ReadDir(p)
@@ -150,39 +170,46 @@ func (s *Server) browse(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "can't open that folder: "+err.Error())
 		return
 	}
-	var dirs []string
+	hidden := r.URL.Query().Get("hidden") == "1"
+	dirs := []string{}
 	for _, d := range entries {
-		if d.IsDir() && !strings.HasPrefix(d.Name(), ".") {
+		if d.IsDir() && (hidden || !strings.HasPrefix(d.Name(), ".")) {
 			dirs = append(dirs, d.Name())
 		}
 	}
 	sort.Slice(dirs, func(i, j int) bool { return strings.ToLower(dirs[i]) < strings.ToLower(dirs[j]) })
 	parent := filepath.Dir(p)
+	var volume *Volume
+	for i, v := range vols {
+		vp := filepath.Clean(v.Path)
+		if p == vp {
+			parent = "" // the top of this storage: up goes to the list of storages
+		}
+		if volume == nil || len(vp) > len(volume.Path) {
+			if rel, err := filepath.Rel(vp, p); err == nil && !strings.HasPrefix(rel, "..") {
+				volume = &vols[i]
+			}
+		}
+	}
 	if parent == p {
 		parent = ""
 	}
-	for _, v := range s.volumes() {
-		if p == filepath.Clean(v["path"]) {
-			parent = "" // don't wander above the phone's storage
-		}
-	}
-	writeJSON(w, map[string]any{"path": p, "parent": parent, "dirs": dirs, "volumes": s.volumes()})
+	writeJSON(w, map[string]any{"path": p, "parent": parent, "dirs": dirs, "volumes": vols, "volume": volume})
 }
 
-func (s *Server) browseStart() string {
-	if s.phone != nil {
-		return s.phone.StorageRoot
-	}
-	home, _ := os.UserHomeDir()
-	return home
-}
-
-// volumes lists the phone's storage: internal storage and any memory card.
-func (s *Server) volumes() []map[string]string {
+// volumes lists the phone's storages: those Android reported, or else the
+// shared storage plus whatever is mounted under /storage.
+func (s *Server) volumes() []Volume {
 	if s.phone == nil {
 		return nil
 	}
-	out := []map[string]string{{"label": "Phone storage", "path": s.phone.StorageRoot}}
+	s.phone.mu.Lock()
+	reported := append([]Volume(nil), s.phone.volumes...)
+	s.phone.mu.Unlock()
+	if len(reported) > 0 {
+		return reported
+	}
+	out := []Volume{{Label: "Phone storage", Path: s.phone.StorageRoot}}
 	entries, _ := os.ReadDir("/storage")
 	for _, d := range entries {
 		n := d.Name()
@@ -190,8 +217,10 @@ func (s *Server) volumes() []map[string]string {
 			continue
 		}
 		p := "/storage/" + n
-		if _, err := os.ReadDir(p); err == nil {
-			out = append(out, map[string]string{"label": "Memory card (" + n + ")", "path": p})
+		if fi, err := os.Stat(p); err == nil && fi.IsDir() && filepath.Clean(p) != filepath.Clean(s.phone.StorageRoot) {
+			if _, err := os.ReadDir(p); err == nil {
+				out = append(out, Volume{Label: "Memory card (" + n + ")", Path: p})
+			}
 		}
 	}
 	return out

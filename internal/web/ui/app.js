@@ -98,6 +98,43 @@ function dialog({ title, body, buttons, run }) {
   });
 }
 
+// Back to top / down to bottom buttons for long pages and long previews. They
+// show only when there is something to scroll in that direction. scroller() is
+// the scrolling element; host is where the buttons are placed.
+function addJumpButtons(scroller, host, extraClass = "") {
+  const up = el("button", { type: "button", "aria-label": "Back to top", title: "Back to top" }, "↑");
+  const down = el("button", { type: "button", "aria-label": "Go to the bottom", title: "Go to the bottom" }, "↓");
+  const box = el("div", { class: `jump ${extraClass}`.trim(), hidden: true }, up, down);
+  host.append(box);
+  const far = 400; // px: nearer than this, scrolling by hand is quicker
+  function update() {
+    const s = scroller();
+    if (!s) return;
+    const max = s.scrollHeight - s.clientHeight;
+    up.hidden = !(max > far * 1.5 && s.scrollTop > far);
+    down.hidden = !(max > far * 1.5 && max - s.scrollTop > far);
+    box.hidden = up.hidden && down.hidden;
+  }
+  function go(toBottom) {
+    const s = scroller();
+    const target = toBottom ? s.scrollHeight : 0;
+    // Smooth for a short way; a very long list would take too long to glide.
+    const short = Math.abs(target - s.scrollTop) < s.clientHeight * 6 && !matchMedia("(prefers-reduced-motion: reduce)").matches;
+    s.scrollTo({ top: target, behavior: short ? "smooth" : "auto" });
+  }
+  up.addEventListener("click", () => go(false));
+  down.addEventListener("click", () => go(true));
+  const target = scroller() === document.scrollingElement ? window : scroller();
+  target.addEventListener("scroll", update, { passive: true });
+  addEventListener("resize", update);
+  // The page's height changes as lists load and redraw.
+  const content = scroller() === document.scrollingElement ? document.body : scroller();
+  if (window.ResizeObserver) new ResizeObserver(update).observe(content);
+  new MutationObserver(update).observe(content, { childList: true, subtree: true });
+  update();
+  return box;
+}
+
 // ---------- state ----------
 
 let state = null;
@@ -401,30 +438,61 @@ async function setProject(id, st) {
 }
 
 // Folder picker for the phone, which has no system folder dialog tgvault can use.
+// It starts at the list of the phone's storages (internal storage, memory
+// cards); from there any folder can be opened.
 async function pickFolderOnPhone(title = "Choose a folder to back up", button = "Back up this folder") {
   let current = "";
-  const where = el("div", { class: "sub" });
+  let hidden = false;
+  const crumbs = el("div", { class: "pick-crumbs" });
+  const chosen = el("div", { class: "sub" });
   const list = el("ul", { class: "list folder-pick" });
-  const vols = el("div", { class: "actions" });
+  const hiddenBox = el("input", { type: "checkbox" });
+  hiddenBox.addEventListener("change", () => { hidden = hiddenBox.checked; go(current); });
+  const sizeText = (v) => (v.total ? `${bytes(v.free)} free of ${bytes(v.total)}` : "");
   async function go(p) {
+    let r;
     try {
-      const r = await api(`/api/browse?path=${encodeURIComponent(p)}`);
-      current = r.path;
-      where.textContent = r.path;
-      replace(vols, (r.volumes || []).length > 1
-        ? r.volumes.map((v) => el("button", { type: "button", class: "small", onclick: () => go(v.path) }, v.label)) : []);
-      replace(list,
-        r.parent ? el("li", { class: "clickable", onclick: () => go(r.parent) }, el("span", { class: "icon" }, "⬆️"), el("div", { class: "grow name" }, "Up one folder")) : null,
-        (r.dirs || []).map((d) => el("li", { class: "clickable", onclick: () => go(`${r.path}/${d}`) }, el("span", { class: "icon" }, "📁"), el("div", { class: "grow name" }, d))));
-    } catch (err) { toast(err.message); }
+      r = await api(`/api/browse?path=${encodeURIComponent(p)}&hidden=${hidden ? 1 : 0}`);
+    } catch (err) { toast(err.message); return; }
+    current = r.path;
+    // Where you are: This phone / storage / folders.
+    const trail = [el("button", { type: "button", onclick: () => go("") }, "This phone")];
+    if (r.volume) {
+      const base = r.volume.path.replace(/\/+$/, "");
+      trail.push(el("span", {}, "/"), el("button", { type: "button", onclick: () => go(r.volume.path) }, r.volume.label));
+      const parts = r.path.slice(base.length).split("/").filter(Boolean);
+      parts.forEach((part, i) => {
+        trail.push(el("span", {}, "/"), el("button", { type: "button", onclick: () => go(`${base}/${parts.slice(0, i + 1).join("/")}`) }, part));
+      });
+    } else if (r.path) {
+      trail.push(el("span", {}, "/"), el("span", {}, r.path));
+    }
+    replace(crumbs, trail);
+    chosen.textContent = current ? `Selected: ${current}` : "Pick a storage, then open the folder you want.";
+    if (r.top) {
+      replace(list, (r.volumes || []).length
+        ? r.volumes.map((v, i) => el("li", { class: "clickable", onclick: () => go(v.path) },
+          el("span", { class: "icon" }, i === 0 ? "📱" : "💾"),
+          el("div", { class: "grow" }, el("div", { class: "name" }, v.label), el("div", { class: "sub" }, sizeText(v)))))
+        : el("li", {}, el("div", { class: "grow sub" }, "No storage found. Check that tgvault is allowed to access files.")));
+      return;
+    }
+    const up = r.parent === "" ? "all storage" : "one folder";
+    replace(list,
+      el("li", { class: "clickable", onclick: () => go(r.parent) }, el("span", { class: "icon" }, "⬆️"), el("div", { class: "grow name" }, `Up to ${up}`)),
+      (r.dirs || []).map((d) => el("li", { class: "clickable", onclick: () => go(`${r.path}/${d}`) }, el("span", { class: "icon" }, "📁"), el("div", { class: "grow name" }, d))),
+      (r.dirs || []).length ? null : el("li", {}, el("div", { class: "grow sub" }, "No folders in here. You can still choose this one.")));
   }
   await go("");
   let picked = null;
   await dialog({
     title,
-    body: el("div", {}, vols, where, list),
+    body: el("div", {}, crumbs, chosen, list, el("label", { class: "inline" }, hiddenBox, " Show hidden folders")),
     buttons: [{ label: "Cancel", value: null }, { label: button, value: "pick", primary: true }],
-    run: async () => { picked = current; },
+    run: async () => {
+      if (!current) throw new Error("Open a storage and then a folder first.");
+      picked = current;
+    },
   });
   return picked;
 }
@@ -1175,6 +1243,8 @@ function renderViewer() {
     canStep ? el("button", { type: "button", class: "vnav prev", "aria-label": "Previous file", disabled: viewer.i === 0, onclick: () => stepViewer(-1) }, "‹") : null,
     canStep ? el("button", { type: "button", class: "vnav next", "aria-label": "Next file", disabled: viewer.i === viewer.list.length - 1, onclick: () => stepViewer(1) }, "›") : null);
   swipeToStep(body);
+  // Text scrolls inside its own box; anything else (a tall picture) in the body.
+  addJumpButtons(() => body.querySelector(".vtext") || body, box, "in-viewer");
   document.body.append(box);
   document.body.classList.add("viewing");
   if (!keepFocus || !box.contains(document.activeElement)) box.focus();
@@ -1617,6 +1687,7 @@ document.addEventListener("DOMContentLoaded", () => {
     },
   }));
 
+  addJumpButtons(() => document.scrollingElement, document.body, "page");
   refresh();
   setInterval(() => {
     if (document.hidden) return;

@@ -13,6 +13,8 @@ import android.os.BatteryManager
 import android.os.Build
 import android.os.Environment
 import android.os.PowerManager
+import android.os.storage.StorageManager
+import android.os.storage.StorageVolume
 import android.webkit.MimeTypeMap
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.FileProvider
@@ -44,6 +46,7 @@ object Core {
     fun update(ctx: Context) {
         if (url == null) return
         Mobile.setPermissions(hasStorage(ctx), hasNotifications(ctx), hasBattery(ctx))
+        Mobile.setVolumes(volumes(ctx))
         Mobile.setConditions(isUnmetered(ctx), isCharging(ctx))
     }
 
@@ -64,6 +67,34 @@ object Core {
         } else {
             ctx.checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
         }
+
+    /** The phone's storages, one per line: label, path, free bytes, total bytes, separated by tabs. */
+    fun volumes(ctx: Context): String {
+        val out = StringBuilder()
+        try {
+            val sm = ctx.getSystemService(StorageManager::class.java)
+            for (v in sm.storageVolumes) {
+                if (v.state != Environment.MEDIA_MOUNTED && v.state != Environment.MEDIA_MOUNTED_READ_ONLY) continue
+                val dir = volumeDir(v) ?: continue
+                val label = (v.getDescription(ctx) ?: "").ifBlank { if (v.isPrimary) "Phone storage" else "Memory card" }
+                out.append(label.replace('\t', ' ').replace('\n', ' ')).append('\t')
+                    .append(dir.absolutePath).append('\t')
+                    .append(dir.freeSpace).append('\t').append(dir.totalSpace).append('\n')
+            }
+        } catch (e: Exception) {
+            // Go falls back to looking in /storage itself.
+        }
+        return out.toString()
+    }
+
+    private fun volumeDir(v: StorageVolume): File? {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) return v.directory
+        return try {
+            File(StorageVolume::class.java.getMethod("getPath").invoke(v) as String)
+        } catch (e: Exception) {
+            if (v.isPrimary) Environment.getExternalStorageDirectory() else null
+        }
+    }
 
     fun hasNotifications(ctx: Context) = NotificationManagerCompat.from(ctx).areNotificationsEnabled()
 
