@@ -11,6 +11,8 @@ import android.os.Bundle
 import android.provider.Settings
 import android.view.View
 import android.view.ViewGroup
+import android.util.Log
+import android.webkit.ConsoleMessage
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
@@ -53,6 +55,18 @@ class MainActivity : Activity() {
         }
         // A previewed video's full-screen button hands the player over here.
         chrome = object : WebChromeClient() {
+            // JavaScript errors and console messages go to Android's log (tag
+            // tgvault-js), so a page problem can be read over adb.
+            override fun onConsoleMessage(m: ConsoleMessage): Boolean {
+                val level = when (m.messageLevel()) {
+                    ConsoleMessage.MessageLevel.ERROR -> Log.ERROR
+                    ConsoleMessage.MessageLevel.WARNING -> Log.WARN
+                    else -> Log.INFO
+                }
+                Log.println(level, "tgvault-js", "${m.message()} (${m.sourceId().substringAfterLast('/')}:${m.lineNumber()})")
+                return true
+            }
+
             override fun onShowCustomView(view: View, callback: CustomViewCallback) {
                 if (fullScreen != null) {
                     callback.onCustomViewHidden()

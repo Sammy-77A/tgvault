@@ -455,6 +455,15 @@ async function pickFolderOnPhone(title = "Choose a folder to back up", button = 
       r = await api(`/api/browse?path=${encodeURIComponent(p)}&hidden=${hidden ? 1 : 0}`);
     } catch (err) { toast(err.message); return; }
     current = r.path;
+    try {
+      show(r);
+    } catch (err) {
+      // Say what went wrong in the list itself instead of leaving it blank.
+      console.error("folder picker:", err && err.stack || err);
+      replace(list, el("li", {}, el("div", { class: "grow sub" }, `Couldn't show this folder: ${err.message}`)));
+    }
+  }
+  function show(r) {
     // Where you are: This phone / storage / folders.
     const trail = [el("button", { type: "button", onclick: () => go("") }, "This phone")];
     if (r.volume) {
@@ -468,7 +477,8 @@ async function pickFolderOnPhone(title = "Choose a folder to back up", button = 
       trail.push(el("span", {}, "/"), el("span", {}, r.path));
     }
     replace(crumbs, trail);
-    chosen.textContent = current ? `Selected: ${current}` : "Pick a storage, then open the folder you want.";
+    const count = (r.volumes || []).length;
+    chosen.textContent = current ? `Selected: ${current}` : `Pick a storage, then open the folder you want (${count} found).`;
     if (r.top) {
       replace(list, (r.volumes || []).length
         ? r.volumes.map((v, i) => el("li", { class: "clickable", onclick: () => go(v.path) },
@@ -485,6 +495,11 @@ async function pickFolderOnPhone(title = "Choose a folder to back up", button = 
   }
   await go("");
   let picked = null;
+  // Shown once the dialog is open: what the list really contains and how big it is.
+  setTimeout(() => {
+    const b = list.getBoundingClientRect();
+    console.info(`folder picker: ${list.children.length} rows, list ${Math.round(b.width)}x${Math.round(b.height)}, viewport ${innerWidth}x${innerHeight}, first row "${list.firstElementChild ? list.firstElementChild.textContent.slice(0, 40) : ""}"`);
+  }, 600);
   await dialog({
     title,
     body: el("div", {}, crumbs, chosen, list, el("label", { class: "inline" }, hiddenBox, " Show hidden folders")),
