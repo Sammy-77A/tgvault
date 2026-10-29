@@ -585,7 +585,7 @@ const cloud = {
   list: "cloudList",
   key: (e) => e.path,
   open: (e) => { if (e.kind !== "folder") return false; openCloud(e.path); return true; },
-  view: (e) => { if (e.kind === "file") openViewer(e); },
+  view: (e) => { if (isZip(e)) openZip(e); else if (e.kind === "file") openViewer(e); },
   render: () => renderSelection(),
 };
 
@@ -670,14 +670,19 @@ function cloudRow(e) {
   // Download and Restore act on the whole selection when this item is part of it.
   const targets = () => (cloud.selected.has(e.path) && cloud.selected.size > 1 ? [...cloud.selected.values()] : [e]);
   const actions = isFolder ? [] : [
-    e.kind === "file" ? el("button", { class: "small", onclick: (ev) => { ev.stopPropagation(); openViewer(e); } }, "View") : null,
+    e.kind === "file" && !isZip(e) ? el("button", { class: "small", onclick: (ev) => { ev.stopPropagation(); openViewer(e); } }, "View") : null,
+    isZip(e) ? el("button", { class: "small", onclick: (ev) => { ev.stopPropagation(); openZip(e); } }, "Open") : null,
     el("button", { class: "small", "data-label": "Download", onclick: (ev) => { ev.stopPropagation(); bulkDownload(targets()); } }, "Download"),
     el("button", { class: "small", "data-label": "Restore", onclick: (ev) => { ev.stopPropagation(); restore(targets()); } }, "Restore"),
     e.versions > 1 ? el("button", { class: "small", onclick: (ev) => { ev.stopPropagation(); showVersions(e); } }, "Versions") : null,
   ];
   return el("li", pickRow(cloud, e, {
     class: isFolder ? "clickable" : "",
-    ondblclick: (ev) => { if (e.kind === "file" && !ev.target.closest("button, input, a")) openViewer(e); },
+    ondblclick: (ev) => {
+      if (ev.target.closest("button, input, a")) return;
+      if (isZip(e)) openZip(e);
+      else if (e.kind === "file") openViewer(e);
+    },
   }),
     box,
     e.kind === "file" ? thumbIcon(e.msgId, e.type, icon) : el("span", { class: "icon" }, icon),
@@ -1045,15 +1050,16 @@ async function restore(entries) {
   });
 }
 
-async function copyTo(entries, why) {
+// chooseDest asks for a folder on this device to copy things into (the phone's
+// folder picker, or a typed path on a PC); null if cancelled.
+async function chooseDest(what, why) {
   let dest = null;
   if (onPhone) {
     dest = await pickFolderOnPhone("Choose where to save them", "Save here");
-    if (!dest) return;
   } else {
     const input = el("input", { type: "text", placeholder: "C:\\Users\\you\\Restored", autocomplete: "off" });
     const ok = await dialog({
-      title: `Copy ${names(entries)} to a folder`,
+      title: `Copy ${what} to a folder`,
       body: el("div", {},
         why ? el("p", {}, why) : null,
         el("label", {}, "Folder", input),
@@ -1064,8 +1070,14 @@ async function copyTo(entries, why) {
       buttons: [{ label: "Cancel", value: null }, { label: "Copy here", value: "go", primary: true }],
       run: async () => { if (!input.value.trim()) throw new Error("Choose a folder first."); dest = input.value.trim(); },
     });
-    if (!ok) return;
+    if (!ok) return null;
   }
+  return dest;
+}
+
+async function copyTo(entries, why) {
+  const dest = await chooseDest(names(entries), why);
+  if (!dest) return;
   try {
     await startBulk("restore", entries, { dest });
     toast("Copying; progress is at the top of the page.");
@@ -1175,10 +1187,14 @@ async function showVersions(entry) {
     el("div", { class: "grow" },
       el("div", { class: "name" }, i === 0 ? "Latest" : `Older version ${i}`),
       el("div", { class: "sub" }, `${versionWhat(v)} · backed up ${when(v.uploadedAt)}${v.parts ? ` · ${v.parts} parts` : ""}`)),
-    entry.kind === "file" ? el("button", { type: "button", class: "small", onclick: () => {
+    entry.kind === "file" && !isZip(entry) ? el("button", { type: "button", class: "small", onclick: () => {
       $("dlg").close();
       openViewer({ ...entry, size: v.size, mtime: v.mtime, parts: v.parts }, [entry], i === 0 ? 0 : v.msgId);
     } }, "View") : null,
+    isZip(entry) ? el("button", { type: "button", class: "small", onclick: () => {
+      $("dlg").close();
+      openZip(entry, v.msgId);
+    } }, "Open") : null,
     onPhone ? null : el("a", { class: "btn small", href: `/api/download?msg=${v.msgId}` }, "Download"))));
   await dialog({ title: entry.name, body, buttons: [{ label: "Close", value: null }] });
 }
@@ -1223,7 +1239,7 @@ function closeViewer() {
   if (!v) return false;
   for (const m of v.querySelectorAll("video, audio")) { m.pause(); m.removeAttribute("src"); m.load(); }
   v.remove();
-  document.body.classList.remove("viewing");
+  if (!$("zipview")) document.body.classList.remove("viewing");
   return true;
 }
 
@@ -1240,14 +1256,20 @@ function renderViewer() {
   closeViewer();
   const e = viewer.list[viewer.i];
   const msgId = viewer.msgId || e.msgId;
-  const src = `/api/preview?msg=${msgId}`;
+  const src = e.zip ? `/api/preview?msg=${e.zip.msg}&entry=${encodeURIComponent(e.zip.entry)}` : `/api/preview?msg=${msgId}`;
   const kind = viewKind(e.name);
   const info = `${bytes(e.size)} · modified ${when(e.mtime)}${viewer.msgId ? " · older version" : ""}${e.parts ? ` · stored in ${e.parts} parts` : ""}`;
   const canStep = !viewer.msgId && viewer.list.length > 1;
-  const download = onPhone
-    ? el("button", { type: "button", class: "small", onclick: () => bulkDownload([e]) }, "Download")
-    : el("a", { class: "btn small", href: `/api/download?msg=${msgId}` }, "Download");
-  const openWith = onPhone ? el("button", { type: "button", class: "small", onclick: () => openWithApp(e) }, "Open with…") : null;
+  const download = e.zip
+    ? (onPhone
+      ? el("button", { type: "button", class: "small", onclick: () => zipExtract("download", [e.zip.entry]) }, "Download")
+      : el("a", { class: "btn small", href: `/api/download?msg=${e.zip.msg}&entry=${encodeURIComponent(e.zip.entry)}` }, "Download"))
+    : onPhone
+      ? el("button", { type: "button", class: "small", onclick: () => bulkDownload([e]) }, "Download")
+      : el("a", { class: "btn small", href: `/api/download?msg=${msgId}` }, "Download");
+  const openWith = onPhone
+    ? el("button", { type: "button", class: "small", onclick: () => (e.zip ? zipExtract("open", [e.zip.entry]) : openWithApp(e)) }, "Open with…")
+    : null;
   const wait = waitNotice(e.size);
   const body = el("div", { class: "vbody" }, viewContent(e, kind, src, msgId, wait), wait.node);
   const box = el("div", { class: "viewer", id: "viewer", role: "dialog", "aria-modal": "true", "aria-label": `Preview of ${e.name}`, tabindex: "-1" },
@@ -1380,6 +1402,7 @@ function swipeToStep(node) {
 }
 
 function viewerKeys(ev) {
+  if (!$("viewer") && $("zipview") && !$("dlg").open && ev.key === "Escape") { closeZip(); return true; }
   if (!$("viewer") || $("dlg").open) return false;
   if (ev.key === "Escape") { closeViewer(); return true; }
   if (ev.target.closest && ev.target.closest("video, audio")) return false; // their own seeking keys
@@ -1392,6 +1415,7 @@ function viewerKeys(ev) {
 window.tgvaultBack = () => {
   if (closeViewer()) return true;
   if ($("dlg").open) { $("dlg").close(); return true; }
+  if (closeZip()) return true;
   return closeMenu();
 };
 
@@ -1417,6 +1441,185 @@ async function refreshCloud(loud) {
   if (tab === "space") await loadSpace();
 }
 window.tgvaultRefresh = refreshCloud;
+
+// ---------- inside ZIPs and projects ----------
+
+// A ZIP file or a code project (stored as a ZIP) can be opened like a folder.
+function isZip(e) {
+  return e.kind === "project" || (e.kind === "file" && /\.zip$/i.test(e.name));
+}
+
+const zipv = { entry: null, msg: 0, dir: "", items: [], selected: new Set(), project: false, files: 0 };
+const zipRowLimit = 5000;
+
+async function openZip(entry, msgId = 0) {
+  closeMenu();
+  zipv.entry = entry;
+  zipv.msg = msgId || entry.msgId;
+  zipv.dir = "";
+  zipv.selected.clear();
+  zipv.items = [];
+  zipv.project = entry.kind === "project";
+  closeZip();
+  const box = el("div", { class: "viewer zipview", id: "zipview", role: "dialog", "aria-modal": "true", "aria-label": `Inside ${entry.name}`, tabindex: "-1" },
+    el("div", { class: "vbar" },
+      el("div", { class: "vtitle" }, el("div", { class: "name" }, entry.name), el("div", { class: "sub", id: "zipSub" }, "Reading what's inside…")),
+      el("div", { class: "vactions" }, el("button", { type: "button", class: "small", onclick: closeZip }, "Close"))),
+    el("div", { class: "zcrumbs", id: "zipCrumbs" }),
+    el("div", { class: "zbar", id: "zipBar", hidden: true }),
+    el("div", { class: "vbody zbody", id: "zipBody" }));
+  document.body.append(box);
+  document.body.classList.add("viewing");
+  addJumpButtons(() => $("zipBody"), box, "in-viewer");
+  box.focus();
+  await loadZipDir("");
+}
+
+function closeZip() {
+  const z = $("zipview");
+  if (!z) return false;
+  z.remove();
+  if (!$("viewer")) document.body.classList.remove("viewing");
+  return true;
+}
+
+async function loadZipDir(dir) {
+  const body = $("zipBody");
+  if (!body) return;
+  replace(body, el("div", { class: "vwait", role: "status" }, el("span", { class: "spin", "aria-hidden": "true" }),
+    el("span", {}, "Reading what's inside… a big ZIP can take a few seconds.")));
+  body.firstChild.hidden = false;
+  let r;
+  try {
+    r = await api(`/api/zip?msg=${zipv.msg}&dir=${encodeURIComponent(dir)}`);
+  } catch (err) {
+    if (!$("zipBody")) return;
+    replace($("zipBody"), el("div", { class: "vcard" }, el("div", { class: "vicon" }, "⚠️"), el("p", {}, `Couldn't open it: ${err.message}`)));
+    return;
+  }
+  if (!$("zipBody")) return;
+  zipv.dir = dir;
+  zipv.items = r.items || [];
+  zipv.files = r.files;
+  zipv.selected.clear();
+  renderZip();
+}
+
+function zipSelected() {
+  return zipv.items.filter((it) => zipv.selected.has(it.path));
+}
+
+function renderZip() {
+  const where = zipv.project ? "project" : "ZIP";
+  $("zipSub").textContent = `${plural(zipv.files, "file")} in this ${where}${zipv.msg === zipv.entry.msgId ? "" : " · older version"}`;
+  const parts = zipv.dir ? zipv.dir.split("/") : [];
+  const crumbs = [el("button", { type: "button", onclick: () => loadZipDir("") }, zipv.entry.name)];
+  parts.forEach((p, i) => {
+    crumbs.push(el("span", {}, "›"));
+    const target = parts.slice(0, i + 1).join("/");
+    crumbs.push(el("button", { type: "button", onclick: () => loadZipDir(target) }, p));
+  });
+  replace($("zipCrumbs"), crumbs);
+
+  const shown = zipv.items.slice(0, zipRowLimit);
+  const rows = shown.map((it) => {
+    const isDir = it.kind === "dir";
+    const box = el("input", { type: "checkbox", class: "pick", "aria-label": `Select ${it.name}`, checked: zipv.selected.has(it.path) || null,
+      onclick: (ev) => { ev.stopPropagation(); if (box.checked) zipv.selected.add(it.path); else zipv.selected.delete(it.path); renderZipBar(); } });
+    const sub = isDir
+      ? `${plural(it.files, "file")} · ${bytes(it.size)}`
+      : `${bytes(it.size)}${it.mtime ? ` · modified ${when(it.mtime)}` : ""}${it.locked ? " · password-protected" : ""}`;
+    return el("li", { class: isDir ? "clickable" : "", onclick: (ev) => { if (isDir && !ev.target.closest("button, input")) loadZipDir(it.path); } },
+      box,
+      el("span", { class: "icon" }, isDir ? "📁" : it.locked ? "🔒" : typeIcons[typeOfName(it.name)] || "📄"),
+      el("div", { class: "grow" }, el("div", { class: "name" }, it.name), el("div", { class: "sub" }, sub)),
+      el("div", { class: "actions" },
+        isDir ? el("button", { type: "button", class: "small", onclick: (ev) => { ev.stopPropagation(); loadZipDir(it.path); } }, "Open") : null,
+        !isDir && !it.locked ? el("button", { type: "button", class: "small", onclick: (ev) => { ev.stopPropagation(); viewZipFile(it); } }, "View") : null,
+        !it.locked ? el("button", { type: "button", class: "small", onclick: (ev) => { ev.stopPropagation(); zipDownload([it]); } }, "Download") : null));
+  });
+  replace($("zipBody"), el("div", { class: "zlist" },
+    zipv.items.length ? el("ul", { class: "list files" }, rows) : el("p", { class: "hint" }, "Nothing in this folder."),
+    zipv.items.length > zipRowLimit ? el("p", { class: "hint" }, `Showing the first ${zipRowLimit.toLocaleString()} of ${zipv.items.length.toLocaleString()}. Open a folder, or select and download what you need.`) : null));
+  renderZipBar();
+}
+
+// A guess at the icon type from a name, for rows inside ZIPs.
+function typeOfName(name) {
+  const k = viewKind(name);
+  return { image: "image", video: "video", audio: "audio", pdf: "document", text: "document" }[k] || "other";
+}
+
+function renderZipBar() {
+  const bar = $("zipBar");
+  const sel = zipSelected();
+  const all = el("input", { type: "checkbox", class: "pick", "aria-label": "Select everything in this folder", checked: sel.length && sel.length === zipv.items.length || null,
+    onclick: () => {
+      if (all.checked) zipv.items.forEach((it) => zipv.selected.add(it.path)); else zipv.selected.clear();
+      renderZip();
+    } });
+  all.indeterminate = sel.length > 0 && sel.length < zipv.items.length;
+  const canRestore = zipv.project && !otherDevice(zipv.entry.path);
+  bar.hidden = !zipv.items.length;
+  replace(bar,
+    el("label", { class: "inline" }, all, sel.length ? `${sel.length.toLocaleString()} selected` : "Select all"),
+    sel.length ? el("div", { class: "actions" },
+      el("button", { type: "button", class: "small primary", onclick: () => zipDownload(sel) }, "Download"),
+      el("button", { type: "button", class: "small", onclick: () => zipCopyTo(sel) }, "Copy to a folder…"),
+      canRestore ? el("button", { type: "button", class: "small", onclick: () => zipRestore(sel) }, "Restore into the project") : null) : null);
+}
+
+function viewZipFile(it) {
+  const files = zipv.items.filter((x) => x.kind === "file" && !x.locked).map((x) => ({
+    name: x.name, path: x.path, size: x.size, mtime: x.mtime, type: typeOfName(x.name), zip: { msg: zipv.msg, entry: x.path },
+  }));
+  const e = files.find((x) => x.path === it.path);
+  if (e) openViewer(e, files);
+}
+
+// Download from inside a ZIP: a PC's browser saves one file as it is, several
+// as a new ZIP; the phone saves into Download/tgvault.
+async function zipDownload(items) {
+  const names = items.map((it) => it.path);
+  if (onPhone) return zipExtract("download", names);
+  if (items.length === 1 && items[0].kind === "file") {
+    location.href = `/api/download?msg=${zipv.msg}&entry=${encodeURIComponent(items[0].path)}`;
+    return;
+  }
+  const form = el("form", { method: "POST", action: "/api/zip-download", hidden: true },
+    el("input", { type: "hidden", name: "msg", value: String(zipv.msg) }),
+    el("input", { type: "hidden", name: "names", value: JSON.stringify(names) }));
+  document.body.append(form);
+  form.submit();
+  form.remove();
+  toast("Preparing a ZIP; your browser will save it.");
+}
+
+async function zipExtract(action, names, dest = "") {
+  try {
+    await api("/api/zip-extract", { msg: zipv.msg, names, action, dest });
+    toast(action === "open" ? "Getting it ready; your apps will open in a moment."
+      : action === "share" ? "Getting the files ready to share…"
+        : "Working on it; progress is at the top of the page.");
+    refresh();
+  } catch (err) { showError(err.message, "That didn't work"); }
+}
+
+async function zipCopyTo(items) {
+  const dest = await chooseDest(items.length === 1 ? items[0].name : `${items.length.toLocaleString()} items`);
+  if (dest) zipExtract("restore", items.map((it) => it.path), dest);
+}
+
+async function zipRestore(items) {
+  await dialog({
+    title: `Restore ${items.length === 1 ? items[0].name : `${items.length.toLocaleString()} items`}`,
+    body: el("div", {},
+      el("p", {}, `Put ${items.length === 1 ? "it" : "them"} back into the project on ${here}, as ${zipv.msg === zipv.entry.msgId ? "of its latest backup" : "of this older version"}. The rest of the project isn't touched.`),
+      el("p", { class: "hint" }, "Files already there are never overwritten; a different existing file keeps its name and the restored copy gets “(restored)” added.")),
+    buttons: [{ label: "Cancel", value: null }, { label: "Restore", value: "go", primary: true }],
+    run: async () => { await zipExtract("restore", items.map((it) => it.path), ""); },
+  });
+}
 
 // ---------- free up space ----------
 

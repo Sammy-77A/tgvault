@@ -45,6 +45,7 @@ type Engine struct {
 	bigSlot           chan struct{}  // held while a file over 2 GB uploads
 	bigProjects       map[int64]bool // projects whose ZIP is over 2 GB (guarded by mu)
 	previews          *blockCache    // recently previewed blocks
+	zipLists          zipLists       // what's inside ZIPs seen lately
 	thumbs            *thumbCache
 
 	wake   chan struct{}

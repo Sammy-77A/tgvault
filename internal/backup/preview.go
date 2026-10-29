@@ -26,6 +26,7 @@ const previewCacheBlocks = 32
 // can serve HTTP range requests.
 type Preview struct {
 	io.ReadSeeker
+	At      io.ReaderAt // the same bytes, readable at any position at once
 	Size    int64
 	ModTime time.Time
 	Local   bool // read from this device's disk, not Telegram
@@ -47,16 +48,22 @@ func (e *Engine) OpenPreview(ctx context.Context, v store.Version) (*Preview, er
 	if v.Kind == store.KindProject {
 		return nil, errors.New("code projects can't be previewed; download or restore them instead")
 	}
+	return e.openStored(ctx, v)
+}
+
+// openStored opens a stored version's bytes, project ZIPs included (browsing
+// inside a ZIP reads them).
+func (e *Engine) openStored(ctx context.Context, v store.Version) (*Preview, error) {
 	mod := time.Unix(v.Mtime, 0)
 	if f := e.localCopy(v); f != nil {
-		return &Preview{ReadSeeker: f, Size: v.Size, ModTime: mod, Local: true, close: f.Close}, nil
+		return &Preview{ReadSeeker: f, At: f, Size: v.Size, ModTime: mod, Local: true, close: f.Close}, nil
 	}
 	pieces, err := e.pieces(v)
 	if err != nil {
 		return nil, err
 	}
 	r := &blockReader{ctx: ctx, e: e, pieces: pieces, size: v.Size, want: v.Hash, h: sha256.New()}
-	return &Preview{ReadSeeker: r, Size: v.Size, ModTime: mod}, nil
+	return &Preview{ReadSeeker: r, At: r, Size: v.Size, ModTime: mod}, nil
 }
 
 // localCopy opens the file on this device if it still matches the version.
@@ -111,6 +118,22 @@ func (r *blockReader) Seek(offset int64, whence int) (int64, error) {
 	}
 	r.pos = offset
 	return offset, nil
+}
+
+// ReadAt reads at any position without moving the reader, so several readers
+// can use it at once (as Go's ZIP reader does). It isn't integrity-checked as
+// a whole; ZIP entries have their own checksums.
+func (r *blockReader) ReadAt(p []byte, off int64) (int, error) {
+	c := &blockReader{ctx: r.ctx, e: r.e, pieces: r.pieces, size: r.size, pos: off, hashedTo: -1}
+	n := 0
+	for n < len(p) {
+		m, err := c.Read(p[n:])
+		n += m
+		if err != nil {
+			return n, err
+		}
+	}
+	return n, nil
 }
 
 func (r *blockReader) Read(p []byte) (int, error) {

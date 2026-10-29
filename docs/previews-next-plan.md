@@ -1,6 +1,6 @@
 # Previews, part 2: thumbnails, looking inside ZIPs, videos that don't play
 
-Status: part 1 (thumbnails) implemented 2026-10-27; parts 2 and 3 not started.
+Status: part 1 (thumbnails) implemented 2026-10-27; part 2 (ZIPs and projects) implemented 2026-10-29; part 3 not started.
 
 Part 1 turned out simpler than planned. The first step found that Telegram
 already makes thumbnails for every stored picture (JPEG, PNG, WebP, GIF) and

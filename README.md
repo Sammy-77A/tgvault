@@ -79,6 +79,15 @@ Pictures, phone videos (`.mp4`) and GIFs show a small picture in Cloud files and
 - They are kept on disk (up to 200 MB on the PC, 50 MB on the phone; the least recently shown go first) and can be cleared in Settings.
 - Telegram makes no thumbnails for `.mkv` videos or music, so those keep their icon.
 
+### Inside ZIPs and projects
+
+**Open** on a `.zip` file or a code project (or double-click it) looks inside it like a folder, without downloading it, on the PC and the phone. In **Versions**, **Open** does the same for an older version.
+
+- A ZIP keeps its table of contents at its end, so listing it fetches only that (a few MB at most, even for a ZIP of several GB). **View** reads just that file's bytes and unpacks them as they arrive; **Download** (or **Copy to a folder…**) saves only the files or folders you selected, and a selection of several downloads as a new ZIP made from the original compressed data.
+- A project is shown as it was at that version: its full ZIP and the change ZIPs after it are merged, so nothing has to be rebuilt first. **Restore into the project** puts the selected files or folders back where the project lives on this device and touches nothing else; as everywhere, a different file already there keeps its name and the restored copy gets "(restored)" added.
+- A file stored without compression inside a ZIP can be jumped around in freely; a compressed one is unpacked from its start, so jumping far ahead in a long compressed video takes a while. Files in password-protected ZIPs are listed but can't be opened.
+- Names with `..`, a drive letter or a leading `/` are hidden, so nothing can be written outside the folder you choose. A file never unpacks to more than the size the ZIP states. Only ZIP is supported; 7z, RAR and `.tar.gz` stay download-only.
+
 ## Projects
 
 A project is stored as a **chain**: a full ZIP of the project, then a change ZIP for each later backup. A change ZIP holds only the files added or modified since the backup before it, plus `.tgvault-deleted.txt` listing the files that were deleted (and `.tgvault-change.txt`, which says in words which full backup and change it follows). Editing one file in a 500 MB project uploads that file, not 500 MB again.

@@ -176,6 +176,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/versions", s.versions)
 	s.mux.HandleFunc("GET /api/download", s.download)
 	s.mux.HandleFunc("GET /api/preview", s.preview)
+	s.mux.HandleFunc("GET /api/zip", s.zipList)
+	s.mux.HandleFunc("POST /api/zip-download", s.zipDownload)
+	s.mux.HandleFunc("POST /api/zip-extract", s.zipExtract)
 	s.mux.HandleFunc("GET /api/thumbs", s.thumbs)
 	s.mux.HandleFunc("GET /api/thumb", s.thumb)
 	s.mux.HandleFunc("POST /api/thumbs/clear", s.clearThumbs)
@@ -584,6 +587,10 @@ func urlEscape(s string) string {
 func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 	v, ok := s.queryVersion(w, r)
 	if !ok {
+		return
+	}
+	if entry := r.URL.Query().Get("entry"); entry != "" {
+		s.zipEntryDownload(w, r, v, entry)
 		return
 	}
 	name := path.Base(v.CloudPath)

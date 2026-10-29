@@ -264,6 +264,19 @@ body.viewing { overflow: hidden; }
   .viewer .vactions { width: 100%; justify-content: flex-end; }
 }
 
+/* Inside a ZIP or project: the viewer's dark frame around an ordinary list */
+.viewer.zipview { --card: #1b1f1e; --line: #2c3331; --muted: #9aa5a0; --text: #eef1ef; --bg: #0b0d0c; }
+.zipview .zcrumbs { display: flex; flex-wrap: wrap; align-items: center; gap: .1rem; padding: .4rem 1rem 0; }
+.zipview .zcrumbs button { border: 0; background: none; padding: .25rem .3rem; color: var(--accent); overflow-wrap: anywhere; text-align: left; }
+.zipview .zcrumbs span { color: var(--muted); }
+.zipview .zbar { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; padding: .4rem 1rem; border-bottom: 1px solid var(--line); }
+.zipview .zbar .actions { margin-left: auto; }
+.viewer .zbody { align-items: flex-start; justify-content: stretch; padding: 0 1rem 1rem; }
+.zipview .zlist { width: 100%; }
+.zipview .zlist .list li.clickable { cursor: pointer; }
+.zipview .zlist .list li.clickable:hover { background: color-mix(in srgb, var(--line) 45%, transparent); }
+.zipview .vwait { position: static; transform: none; margin: 3rem auto; flex-direction: row; }
+
 /* Holding a row opens its menu; don't start selecting text instead. */
 .phone .files li[data-path] { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 .ctxmenu {
