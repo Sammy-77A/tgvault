@@ -62,6 +62,7 @@ type Server struct {
 	pairing *pair.Listener // set on devices that can be logged in from the PC
 	phone   *Phone         // set when running on a phone
 	shares  shareDirs      // folders for files being shared or opened (phone)
+	plays   playKeys       // links handed to video players
 }
 
 // SetPairing shows the "log in from your PC" details while logged out.
@@ -103,6 +104,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if r.URL.Path == "/api/ping" {
 		w.Write([]byte("tgvault"))
+		return
+	}
+	// A video player (VLC, the phone's player) can't send the cookie; it gets a
+	// link with a key for one file instead.
+	if strings.HasPrefix(r.URL.Path, "/play/") {
+		s.play(w, r)
 		return
 	}
 	// The browser is opened with ?t=<token>; swap it for a cookie.
@@ -177,6 +184,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/download", s.download)
 	s.mux.HandleFunc("GET /api/preview", s.preview)
 	s.mux.HandleFunc("GET /api/zip", s.zipList)
+	s.mux.HandleFunc("POST /api/play-link", s.playLink)
+	s.mux.HandleFunc("POST /api/play-vlc", s.playVLC)
 	s.mux.HandleFunc("POST /api/zip-download", s.zipDownload)
 	s.mux.HandleFunc("POST /api/zip-extract", s.zipExtract)
 	s.mux.HandleFunc("GET /api/thumbs", s.thumbs)
@@ -270,6 +279,7 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 		"roots":      roots,
 		"projects":   projects,
 		"autostart":  autostartEnabled(),
+		"vlc":        vlcPath() != "",
 		"notify":     notify.Enabled(s.st),
 		"pairing":    s.pairingInfo(),
 		"phone":      s.phoneState(),

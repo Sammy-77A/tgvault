@@ -56,4 +56,7 @@ dependencies {
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.work:work-runtime-ktx:2.10.0")
     implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
+    // Plays videos the WebView can't (MKV, x265/HEVC) with the phone's decoders.
+    implementation("androidx.media3:media3-exoplayer:1.5.1")
+    implementation("androidx.media3:media3-ui:1.5.1")
 }

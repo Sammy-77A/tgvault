@@ -166,6 +166,9 @@ class MainActivity : Activity() {
                 } else {
                     openSettings(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
                 }
+            "play" -> url.getQueryParameter("u")?.let {
+                startActivity(Intent(this, PlayerActivity::class.java).putExtra("url", it))
+            }
             "share-log" -> shareLog()
             "check-update" -> thread {
                 val page = Updater.check(this)

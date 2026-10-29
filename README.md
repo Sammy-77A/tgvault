@@ -68,7 +68,9 @@ The parts are a plain split, so you can also rebuild a file without tgvault: dow
 - A file that's still on this device unchanged is shown from the disk, with no Telegram traffic. Otherwise only the part being looked at is fetched from Telegram, 1 MB at a time: jumping to the middle of a 2 GB film fetches a few MB, and files over 2 GB work the same way.
 - Nothing is saved to disk for a preview. Downloads and restores still check every file's SHA-256; a preview checks it when it reads a whole file (pictures, text).
 - Previews are served so they can't run anything inside tgvault: web pages, SVG scripts and code show as plain text or are blocked from running.
-- Whether a video or song plays depends on the formats the browser or phone supports; some `.mkv` videos (x265/HEVC) play sound only. Download or Open with… plays them in another app.
+- Whether a video or song plays in the page depends on the formats the browser or phone supports; some `.mkv` videos (x265/HEVC) play sound only. For those, **Play in VLC** (PC, when VLC is installed) and **Player** (phone) play the file in a real player, streaming it the same way, so seeking fetches only the part you jump to.
+  - VLC and the phone's player can't send tgvault's login cookie, so they get a link with a random key. A key opens one file (or one file inside a ZIP) and nothing else, only from the same device, and stops working after 6 hours.
+  - The phone's player is built into the app (Google's Media3 ExoPlayer) and uses the phone's own decoders, so it plays what the phone can: MKV, x265/HEVC, subtitles stored in the file. A sound format the phone has no decoder for (DTS on most phones) still won't play; **Open with…** can hand it to another app.
 
 ### Thumbnails
 

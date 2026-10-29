@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -57,4 +58,38 @@ if ($f.ShowDialog($owner) -eq 'OK') { [Console]::Out.Write($f.SelectedPath) }`
 		return "", errors.New("could not open the folder picker; type the path instead")
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// vlcPath is where VLC is installed ("" when it isn't).
+func vlcPath() string {
+	for _, key := range []string{`SOFTWARE\VideoLAN\VLC`, `SOFTWARE\WOW6432Node\VideoLAN\VLC`} {
+		k, err := registry.OpenKey(registry.LOCAL_MACHINE, key, registry.QUERY_VALUE)
+		if err != nil {
+			continue
+		}
+		dir, _, err := k.GetStringValue("InstallDir")
+		k.Close()
+		if err == nil {
+			if exe := filepath.Join(dir, "vlc.exe"); fileExists(exe) {
+				return exe
+			}
+		}
+	}
+	for _, base := range []string{os.Getenv("ProgramFiles"), os.Getenv("ProgramFiles(x86)")} {
+		if base == "" {
+			continue
+		}
+		if exe := filepath.Join(base, "VideoLAN", "VLC", "vlc.exe"); fileExists(exe) {
+			return exe
+		}
+	}
+	if p, err := exec.LookPath("vlc"); err == nil {
+		return p
+	}
+	return ""
+}
+
+func fileExists(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && fi.Mode().IsRegular()
 }

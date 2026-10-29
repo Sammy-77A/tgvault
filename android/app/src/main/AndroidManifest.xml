@@ -38,6 +38,13 @@
             </intent-filter>
         </activity>
 
+        <!-- Plays videos the page's own player can't (MKV, x265/HEVC). -->
+        <activity
+            android:name=".PlayerActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize"
+            android:exported="false"
+            android:theme="@style/Theme.Tgvault.Player" />
+
         <!-- WorkManager runs long backups as a data-sync foreground service. -->
         <service
             android:name="androidx.work.impl.foreground.SystemForegroundService"

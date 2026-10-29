@@ -1270,13 +1270,14 @@ function renderViewer() {
   const openWith = onPhone
     ? el("button", { type: "button", class: "small", onclick: () => (e.zip ? zipExtract("open", [e.zip.entry]) : openWithApp(e)) }, "Open with…")
     : null;
+  const play = playButton(e, kind, msgId);
   const wait = waitNotice(e.size);
   const body = el("div", { class: "vbody" }, viewContent(e, kind, src, msgId, wait), wait.node);
   const box = el("div", { class: "viewer", id: "viewer", role: "dialog", "aria-modal": "true", "aria-label": `Preview of ${e.name}`, tabindex: "-1" },
     el("div", { class: "vbar" },
       el("div", { class: "vtitle" }, el("div", { class: "name" }, e.name),
         el("div", { class: "sub" }, info, canStep ? ` · ${viewer.i + 1} of ${viewer.list.length}` : "")),
-      el("div", { class: "vactions" }, download, openWith,
+      el("div", { class: "vactions" }, play, download, openWith,
         el("button", { type: "button", class: "small", "aria-label": "Close preview", onclick: closeViewer }, "Close"))),
     body,
     canStep ? el("button", { type: "button", class: "vnav prev", "aria-label": "Previous file", disabled: viewer.i === 0, onclick: () => stepViewer(-1) }, "‹") : null,
@@ -1336,13 +1337,18 @@ function viewContent(e, kind, src, msgId, wait) {
     // Shown while the player waits for data (on the phone, from pressing play).
     for (const ev of ["loadstart", "waiting", "seeking"]) media.addEventListener(ev, wait.on);
     for (const ev of ["loadeddata", "canplay", "playing", "error", "abort", "emptied"]) media.addEventListener(ev, wait.off);
-    media.addEventListener("error", () => media.replaceWith(card(`This ${kind === "video" ? "video" : "recording"} can't play here: its format isn't supported by ${onPhone ? "this phone" : "this browser"}.`)));
+    media.addEventListener("error", () => {
+      const c = card(`This ${kind === "video" ? "video" : "recording"} can't play here: its format isn't supported by ${onPhone ? "this page's player" : "this browser"}. ${playerHint()}`);
+      c.append(playButton(e, kind, msgId, true));
+      media.replaceWith(c);
+    });
     if (kind === "video") {
       // Some videos (often x265/HEVC) play their sound but no picture here.
       media.addEventListener("loadedmetadata", () => {
         if (!media.videoWidth && media.parentNode) {
           const wrap = el("div", { class: "vvideo" }, el("p", { class: "vwarn" },
-            `This video's picture can't be shown here (its format isn't supported by ${onPhone ? "this phone" : "this browser"}); the sound may still play. ${onPhone ? "Open with… lets a video app play it." : "Download it to watch it in a video player."}`));
+            `This video's picture can't be shown here (its format isn't supported by ${onPhone ? "this page's player" : "this browser"}); the sound may still play. ${playerHint()}`),
+            playButton(e, kind, msgId, true));
           media.replaceWith(wrap);
           wrap.append(media);
         }
@@ -1375,6 +1381,34 @@ async function loadText(pre, src, size) {
   } catch (err) {
     pre.textContent = `Couldn't load it: ${err.message}`;
   }
+}
+
+// Videos and songs the page can't play go to a real player: VLC on a PC that
+// has it, and tgvault's own player on the phone.
+function playerHint() {
+  if (onPhone) return "The Player button plays it with this phone's own decoders.";
+  return state && state.vlc ? "Play in VLC opens it there." : "Download it to watch it in a video player.";
+}
+
+function playButton(e, kind, msgId, prominent = false) {
+  if (kind !== "video" && kind !== "audio") return null;
+  if (!onPhone && !(state && state.vlc)) return null;
+  return el("button", { type: "button", class: prominent ? "small primary" : "small", onclick: () => playExternally(e, msgId) },
+    onPhone ? "Player" : "Play in VLC");
+}
+
+async function playExternally(e, msgId) {
+  const body = e.zip ? { msg: e.zip.msg, entry: e.zip.entry } : { msg: msgId, entry: "" };
+  for (const m of document.querySelectorAll("#viewer video, #viewer audio")) m.pause();
+  try {
+    if (onPhone) {
+      const r = await api("/api/play-link", body);
+      location.href = `tgvault://play?u=${encodeURIComponent(r.url)}`;
+    } else {
+      await api("/api/play-vlc", body);
+      toast("Opening it in VLC…");
+    }
+  } catch (err) { showError(err.message, "Couldn't start the player"); }
 }
 
 // Phone: hand a file to another app (a PDF reader, an office app…).

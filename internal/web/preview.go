@@ -55,10 +55,15 @@ func (s *Server) preview(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	s.servePreview(w, r, v, r.URL.Query().Get("entry"))
+}
+
+// servePreview serves a version, or a file inside it (entry), with range support.
+func (s *Server) servePreview(w http.ResponseWriter, r *http.Request, v store.Version, entry string) {
 	var p servable
 	var err error
 	name := path.Base(v.CloudPath)
-	if entry := r.URL.Query().Get("entry"); entry != "" {
+	if entry != "" {
 		// A file inside a ZIP or project.
 		name = path.Base(entry)
 		var zf *backup.ZipFile
