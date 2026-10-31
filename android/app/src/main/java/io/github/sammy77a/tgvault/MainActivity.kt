@@ -115,6 +115,7 @@ class MainActivity : Activity() {
             try {
                 val url = Core.start(this)
                 BackupWorker.schedule(this)
+                runOnUiThread { WatchService.start(this) }
                 runOnUiThread {
                     started = true
                     web.loadUrl(url)
@@ -140,6 +141,7 @@ class MainActivity : Activity() {
             thread {
                 Core.update(this)
                 BackupWorker.schedule(this) // picks up changed Wi-Fi/charging settings
+                runOnUiThread { WatchService.start(this) }
             }
         }
     }

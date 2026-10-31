@@ -12,7 +12,9 @@ import androidx.core.app.NotificationManagerCompat
 object Notifications {
     private const val ALERTS = "alerts"
     private const val BACKUP = "backup"
+    private const val WATCH = "watch"
     const val BACKUP_ID = 1
+    const val WATCH_ID = 2
     private var nextId = 100
 
     fun createChannels(ctx: Context) {
@@ -23,11 +25,26 @@ object Notifications {
             },
         )
         nm.createNotificationChannel(
+            NotificationChannel(WATCH, "Watching for new files", NotificationManager.IMPORTANCE_MIN).apply {
+                description = "Always shown while tgvault keeps your backup going; hide it here if you like"
+            },
+        )
+        nm.createNotificationChannel(
             NotificationChannel(BACKUP, "Backing up", NotificationManager.IMPORTANCE_LOW).apply {
                 description = "Shown while tgvault uploads in the background"
             },
         )
     }
+
+    fun watching(ctx: Context) = NotificationCompat.Builder(ctx, WATCH)
+        .setSmallIcon(R.drawable.ic_notification)
+        .setContentTitle("tgvault is watching for new files")
+        .setContentText("Keeps your backup going in the background")
+        .setContentIntent(openApp(ctx))
+        .setOngoing(true)
+        .setSilent(true)
+        .setPriority(NotificationCompat.PRIORITY_MIN)
+        .build()
 
     private fun openApp(ctx: Context): PendingIntent = PendingIntent.getActivity(
         ctx, 0, Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),

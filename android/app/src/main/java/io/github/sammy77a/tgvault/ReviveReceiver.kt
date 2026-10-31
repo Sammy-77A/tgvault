@@ -18,6 +18,7 @@ class ReviveReceiver : BroadcastReceiver() {
             try {
                 Core.start(context.applicationContext)
                 BackupWorker.schedule(context.applicationContext)
+                WatchService.start(context.applicationContext)
             } catch (e: Exception) {
                 Log.e("tgvault", "couldn't restore the backup schedule", e)
             } finally {

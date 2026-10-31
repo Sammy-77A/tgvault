@@ -34,10 +34,13 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, params)
             Log.w(TAG, "running without a foreground notification: $e")
             false
         }
+        val began = System.currentTimeMillis()
         try {
             Core.start(applicationContext)
             Core.update(applicationContext)
-            Mobile.runBackup(if (foreground) 50L * 60 else 9L * 60)
+            WatchService.start(applicationContext)
+            val finished = Mobile.runBackup(if (foreground) 50L * 60 else 9L * 60)
+            Log.i(TAG, "scheduled run: ${if (finished) "finished" else "ran out of time"} after ${(System.currentTimeMillis() - began) / 1000}s, foreground=$foreground")
             Updater.checkDaily(applicationContext)
         } catch (e: Exception) {
             Log.e(TAG, "backup failed", e)
