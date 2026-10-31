@@ -27,6 +27,9 @@ object Core {
     private var url: String? = null
     @Volatile private var foreground = false
 
+    /** The network the whole app is pinned to (see TgvaultApp.pin). */
+    @Volatile var pinned: android.net.Network? = null
+
     fun dataDir(ctx: Context) = File(ctx.filesDir, "tgvault").absolutePath
 
     /** Starts tgvault if needed and returns its page URL. Call off the main thread. */
@@ -45,6 +48,7 @@ object Core {
     /** Passes current permissions, network and charging state to tgvault. */
     fun update(ctx: Context) {
         if (url == null) return
+        (ctx.applicationContext as? TgvaultApp)?.pin() // the Wi-Fi only setting may have changed
         Mobile.setPermissions(hasStorage(ctx), hasNotifications(ctx), hasBattery(ctx))
         Mobile.setVolumes(volumes(ctx))
         Mobile.setConditions(isUnmetered(ctx), isCharging(ctx))
@@ -103,7 +107,7 @@ object Core {
 
     fun isUnmetered(ctx: Context): Boolean {
         val cm = ctx.getSystemService(ConnectivityManager::class.java)
-        val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
+        val caps = cm.getNetworkCapabilities(pinned ?: cm.activeNetwork) ?: return false
         return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
     }
 
