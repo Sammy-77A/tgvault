@@ -28,6 +28,11 @@ class PlayerActivity : Activity() {
     private var position = 0L
     private var playing = true
 
+    companion object {
+        /** True while the player is on screen (the main page waits for it before closing itself). */
+        @Volatile var showing = false
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val link = intent.getStringExtra("url")
@@ -49,6 +54,7 @@ class PlayerActivity : Activity() {
 
     override fun onStart() {
         super.onStart()
+        showing = true
         if (url.isEmpty()) return
         // A decoder that fails to start hands over to the next one that can play it.
         val p = ExoPlayer.Builder(this, DefaultRenderersFactory(this).setEnableDecoderFallback(true)).build()
@@ -71,6 +77,7 @@ class PlayerActivity : Activity() {
 
     override fun onStop() {
         super.onStop()
+        showing = false
         player?.let {
             position = it.currentPosition
             playing = it.playWhenReady

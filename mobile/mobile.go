@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +21,23 @@ import (
 	"github.com/Sammy-77A/tgvault/internal/app"
 	"github.com/Sammy-77A/tgvault/internal/web"
 )
+
+// The phone has little spare memory and Android ends the biggest app first, so
+// the Go side keeps a soft ceiling, collects early, and hands freed memory
+// back to the system now and then instead of holding on to it.
+const memoryCeiling = 96 << 20
+
+func limitMemory() {
+	debug.SetGCPercent(40)
+	debug.SetMemoryLimit(memoryCeiling)
+	go func() {
+		for range time.Tick(45 * time.Second) {
+			debug.FreeOSMemory()
+		}
+	}()
+}
+
+var limitOnce sync.Once
 
 // Version is set by the build.
 var Version = "0.2.0-dev"
@@ -62,6 +80,7 @@ func Start(dataDir, storageRoot string, host Host) (string, error) {
 		return "", err
 	}
 	setupLog(dataDir)
+	limitOnce.Do(limitMemory)
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return "", err
@@ -109,7 +128,9 @@ func RunBackup(timeoutSeconds int) bool {
 	if a == nil {
 		return false
 	}
-	return a.RunBackup(time.Duration(timeoutSeconds) * time.Second)
+	done := a.RunBackup(time.Duration(timeoutSeconds) * time.Second)
+	debug.FreeOSMemory()
+	return done
 }
 
 // SetConditions passes whether the phone is on an unmetered network (Wi-Fi)

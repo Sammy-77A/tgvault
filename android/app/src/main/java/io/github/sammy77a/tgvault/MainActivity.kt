@@ -34,6 +34,10 @@ class MainActivity : Activity() {
     private var fullScreenDone: WebChromeClient.CustomViewCallback? = null
     private lateinit var chrome: WebChromeClient
 
+    private companion object {
+        const val AWAY_MS = 3 * 60 * 1000L
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -143,6 +147,35 @@ class MainActivity : Activity() {
     override fun onPause() {
         super.onPause()
         Core.setForeground(false)
+    }
+
+    // The page's web engine runs in extra processes that together take about as
+    // much memory as the backup itself. Left alone in the background it makes
+    // Android end the app; after a few minutes away, close it. Coming back
+    // reopens the page.
+    private val closeLater = object : Runnable {
+        override fun run() {
+            if (PlayerActivity.showing) swipe.postDelayed(this, AWAY_MS) else finish()
+        }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        if (started && !isChangingConfigurations) swipe.postDelayed(closeLater, AWAY_MS)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        if (::swipe.isInitialized) swipe.removeCallbacks(closeLater)
+    }
+
+    override fun onDestroy() {
+        if (::swipe.isInitialized) {
+            swipe.removeCallbacks(closeLater)
+            swipe.removeAllViews()
+        }
+        if (::web.isInitialized) web.destroy()
+        super.onDestroy()
     }
 
     private fun pageRefresh() {
