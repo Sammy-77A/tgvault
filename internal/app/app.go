@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Sammy-77A/tgvault/internal/backup"
+	"github.com/Sammy-77A/tgvault/internal/friends"
 	"github.com/Sammy-77A/tgvault/internal/meta"
 	"github.com/Sammy-77A/tgvault/internal/notify"
 	"github.com/Sammy-77A/tgvault/internal/pair"
@@ -30,9 +31,19 @@ type Options struct {
 	Version     string
 	Pairing     bool // let a logged-in PC log this device in over the local network
 	Phone       *PhoneOptions
-	TMDBKey     string // the library app's TMDB key
-	SubtitleKey string // the library app's subtitle service key
-	Library     string // the library app: only this folder of the backup can be browsed and downloaded
+	Server      *ServerOptions // set to serve friends' files over the network
+	TMDBKey     string         // the library app's TMDB key
+	SubtitleKey string         // the library app's subtitle service key
+	Library     string         // the library app: only this folder of the backup can be browsed and downloaded
+}
+
+// ServerOptions turn this instance into a file server for a few friends: the
+// API listens on Listener, and uploads are stored in the owner's Telegram.
+type ServerOptions struct {
+	Listener   net.Listener
+	SpoolMax   int64
+	PublicURL  string
+	TrustProxy bool
 }
 
 // PhoneOptions are set when tgvault runs inside the Android app.
@@ -121,6 +132,20 @@ func Start(ctx context.Context, o Options) (*App, error) {
 			_ = st.Set(backup.SettingSubtitleKey, o.SubtitleKey)
 		}
 		o.Pairing = false // nothing in the library app opens to the local network
+	}
+	if so := o.Server; so != nil {
+		// Friends' folders are plain files; never ask about code projects.
+		eng.Configure(backup.Config{NoProjects: true})
+		hub := friends.New(st, eng, friends.Options{DataDir: o.DataDir, SpoolMax: so.SpoolMax,
+			PublicURL: so.PublicURL, TrustProxy: so.TrustProxy})
+		go hub.Run(ctx)
+		go func() {
+			log.Printf("friends' file API at %s", so.Listener.Addr())
+			if err := hub.Serve(ctx, so.Listener); err != nil {
+				log.Printf("friends API: %v", err)
+				cancel()
+			}
+		}()
 	}
 	if o.Pairing {
 		pl := pair.NewListener(tg)

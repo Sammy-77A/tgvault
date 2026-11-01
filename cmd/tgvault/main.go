@@ -19,9 +19,11 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"syscall"
 	"time"
 
 	"github.com/Sammy-77A/tgvault/internal/app"
+	"github.com/Sammy-77A/tgvault/internal/friends"
 )
 
 var version = "0.1.0-dev"
@@ -33,23 +35,25 @@ type uiInfo struct {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "friends" {
+		friendsCommand(os.Args[2:])
+		return
+	}
 	background := flag.Bool("background", false, "start without opening the browser")
 	dataFlag := flag.String("data", "", "folder for tgvault's settings and login (default: %APPDATA%\\tgvault)")
 	port := flag.Int("port", 8790, "first local port to try for the web page")
+	server := flag.Bool("server", false, "run as a file server for friends (no browser; see 'tgvault friends')")
+	api := flag.String("api", "127.0.0.1:8800", "with --server: address for the friends' file API (put HTTPS in front of it)")
+	publicURL := flag.String("public-url", "", "with --server: the address friends use, e.g. https://files.example.com")
+	proxy := flag.Bool("behind-proxy", false, "with --server: trust X-Forwarded-For from a reverse proxy on this machine")
+	spoolMax := flag.String("spool-max", "20GB", "with --server: most uploads allowed to wait for Telegram at once (0 = no limit)")
 	flag.Parse()
 
-	dataDir := *dataFlag
-	if dataDir == "" {
-		cfg, err := os.UserConfigDir()
-		if err != nil {
-			fatal(err)
-		}
-		dataDir = filepath.Join(cfg, "tgvault")
-	}
-	if err := os.MkdirAll(dataDir, 0o700); err != nil {
-		fatal(err)
-	}
+	dataDir := dataPath(*dataFlag)
 	setupLog(dataDir)
+	if *server {
+		*background = true
+	}
 
 	infoPath := filepath.Join(dataDir, "ui.json")
 	if openExisting(infoPath, *background) {
@@ -65,17 +69,50 @@ func main() {
 		fatal(err)
 	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	a, err := app.Start(ctx, app.Options{DataDir: dataDir, Listener: listener, Token: token, Version: version})
+	opts := app.Options{DataDir: dataDir, Listener: listener, Token: token, Version: version}
+	if *server {
+		max, err := friends.ParseSize(*spoolMax)
+		if err != nil {
+			fatal(err)
+		}
+		apiListener, err := net.Listen("tcp", *api)
+		if err != nil {
+			fatal(fmt.Errorf("friends' API address %s: %w", *api, err))
+		}
+		opts.Server = &app.ServerOptions{Listener: apiListener, SpoolMax: max, PublicURL: *publicURL, TrustProxy: *proxy}
+	}
+	a, err := app.Start(ctx, opts)
 	if err != nil {
 		fatal(err)
+	}
+	if *server {
+		// The management page only listens on this machine; reach it over an
+		// SSH tunnel (ssh -L 8790:127.0.0.1:8790 you@server) to log in to Telegram.
+		fmt.Println("tgvault server running. Management page:", a.URL)
 	}
 	if !*background {
 		openBrowser(a.URL)
 	}
 	<-a.Done()
+}
+
+// dataPath is the folder for settings, login and logs, created if needed.
+func dataPath(flagValue string) string {
+	dir := flagValue
+	if dir == "" {
+		cfg, err := os.UserConfigDir()
+		if err != nil {
+			fatal(err)
+		}
+		dir = filepath.Join(cfg, "tgvault")
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		fatal(err)
+	}
+	return dir
 }
 
 // openExisting opens the page of an already running tgvault, if any.

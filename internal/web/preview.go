@@ -186,3 +186,7 @@ func (s *Server) clearThumbs(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, map[string]bool{"ok": true})
 }
+
+// PreviewType is the content type a file may be shown inline as; anything that
+// could run in a browser comes back as plain text or plain bytes.
+func PreviewType(name string) string { return previewType(name) }

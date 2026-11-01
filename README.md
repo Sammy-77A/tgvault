@@ -55,6 +55,10 @@ The Android app backs up the phone into the same Telegram backup. It runs the sa
 
 GitHub Actions builds it (`.github/workflows/android.yml`) for 64-bit ARM phones (nearly all current phones; x86 Android emulators block a system call the SQLite library uses): `gomobile bind` turns the `mobile` package into an Android library, then Gradle builds the app in `android/`. Each push to `main` updates the android-test pre-release. Release signing uses the repository secrets `ANDROID_KEYSTORE_B64`, `ANDROID_KEYSTORE_PASSWORD` and `ANDROID_KEY_ALIAS`; keep an offline copy of that key, or updates won't install over the existing app.
 
+## Server mode (a file host for friends)
+
+`tgvault --server` lets a few friends store and fetch files through an HTTP API, with their own keys, folders and storage limits, while everything stays in your Telegram. See [docs/server-mode.md](docs/server-mode.md).
+
 ## Files over 2 GB
 
 Telegram stores at most about 2 GB per message, so bigger files are stored as several messages, each holding the next 1.99 GB of the file: `movie.mkv.part1of3`, `movie.mkv.part2of3`, … tgvault joins them back together when you restore or download, and checks every part and the whole file against their SHA-256 fingerprints. A file only counts as backed up once every part is in Telegram, and an interrupted upload continues where it stopped.
