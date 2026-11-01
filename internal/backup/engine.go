@@ -65,6 +65,7 @@ type Engine struct {
 	cooldown   time.Time
 	cfg        Config
 	conditions Conditions
+	beatSeen   bool // the heartbeat has run since this process started
 }
 
 // Progress of an item being uploaded.
@@ -131,6 +132,7 @@ func (e *Engine) Run(ctx context.Context) error {
 		defer w.Close()
 		go e.watchLoop(ctx)
 	}
+	go e.heartbeat(ctx)
 	go e.scanLoop(ctx)
 	go e.reconcileLoop(ctx)
 	go e.syncLoop(ctx)

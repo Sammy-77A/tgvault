@@ -838,3 +838,10 @@ func (s *Store) ClearResume(cloudPath string) error {
 	_, err := s.db.Exec(`DELETE FROM resumes WHERE cloud_path=?`, cloudPath)
 	return err
 }
+
+// LastUploadAt is when the newest stored version reached Telegram (0 if none).
+func (s *Store) LastUploadAt() int64 {
+	var t sql.NullInt64
+	_ = s.db.QueryRow(`SELECT MAX(uploaded_at) FROM versions`).Scan(&t)
+	return t.Int64
+}

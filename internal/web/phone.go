@@ -285,3 +285,18 @@ func freeName(p string) string {
 		}
 	}
 }
+
+// health is the status screen's content, with advice that only fits phones.
+func (s *Server) health() backup.Health {
+	h := s.eng.Health()
+	if s.phone != nil {
+		for i, c := range h.Checks {
+			if c.Name == "Pauses" && c.State == "warn" {
+				h.Checks[i].Hint = "On phones this is usually the power manager freezing apps it thinks are idle. " +
+					"Set tgvault to Unrestricted under Settings → Apps → tgvault → Battery, and allow it to run in the background " +
+					"or autostart in the phone's own manager (Phone Master, Security or similar). Keep tgvault's notification on."
+			}
+		}
+	}
+	return h
+}

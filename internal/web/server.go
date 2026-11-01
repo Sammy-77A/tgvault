@@ -276,6 +276,7 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 		"ui":         uiVersion,
 		"telegram":   s.tg.Info(),
 		"engine":     s.eng.Status(),
+		"health":     s.health(),
 		"roots":      roots,
 		"projects":   projects,
 		"autostart":  autostartEnabled(),

@@ -386,6 +386,7 @@ function renderOverview() {
       el("div", { class: "hint" }, sub, held ? ` ${held} project folder(s) need your decision below.` : ""),
       ups));
 
+  renderHealth();
   renderPhoneBanner();
   renderSuggestions();
 
@@ -427,6 +428,44 @@ function renderOverview() {
     el("div", { class: "actions" },
       el("button", { class: "small", onclick: () => api(`/api/roots/${r.id}/pause`, { paused: !r.paused }).then(refresh) }, r.paused ? "Resume" : "Pause"),
       el("button", { class: "small danger", onclick: () => removeRoot(r) }, "Stop backing up")))));
+}
+
+// The status card: one line when all is well, the full list of checks when
+// something needs a look (or when opened).
+let healthOpen = null;
+function renderHealth() {
+  const h = state.health;
+  const card = $("health");
+  if (!h || !state.roots || !state.roots.length) { card.hidden = true; return; }
+  card.hidden = false;
+  const bad = h.level === "attention" || h.level === "problem";
+  const open = healthOpen === null ? bad : healthOpen;
+  const when = (t) => new Date(t * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  const len = (g) => {
+    const m = Math.round((g.to - g.from) / 60);
+    return m >= 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m} min`;
+  };
+  const report = () => [`tgvault status: ${h.headline}`, ...h.checks.map((c) => `- [${c.state}] ${c.name}: ${c.detail}${c.hint ? " (" + c.hint + ")" : ""}`),
+    ...(h.gaps || []).map((g) => `- silent ${when(g.from)} to ${when(g.to)} (${len(g)}, ${g.kind})`)].join("\n");
+  const dotClass = { ok: "ok", working: "info", attention: "warn", problem: "bad" }[h.level] || "info";
+  replace(card,
+    el("div", { class: "hhead" },
+      el("span", { class: "dot " + dotClass, "aria-hidden": "true" }),
+      el("div", { class: "grow" }, el("b", {}, bad ? "Needs a look" : "Status"), el("div", { class: "hint" }, h.headline)),
+      el("button", { class: "small", type: "button", onclick: () => { healthOpen = !open; renderHealth(); } }, open ? "Hide details" : "Details")),
+    open ? el("ul", {}, h.checks.map((c) => el("li", {},
+      el("span", { class: "dot " + c.state, "aria-hidden": "true" }),
+      el("div", {}, el("b", {}, c.name), el("div", {}, c.detail), c.hint ? el("div", { class: "hint" }, c.hint) : null)))) : null,
+    open && (h.gaps || []).length ? el("div", { class: "gaps" },
+      el("b", {}, "Times tgvault did nothing (last 7 days)"),
+      el("ul", {}, h.gaps.slice().reverse().map((g) => el("li", {},
+        el("span", { class: "dot " + (g.to - g.from >= 900 ? "warn" : "info"), "aria-hidden": "true" }),
+        el("div", {}, `${when(g.from)} → ${when(g.to)} (${len(g)})`,
+          el("div", { class: "hint" }, g.kind === "stopped" ? "tgvault was closed or stopped, then started again." : "tgvault was frozen or the device was asleep, then carried on."))))))
+      : null,
+    open ? el("div", { class: "actions" }, el("button", { class: "small", type: "button", onclick: () => {
+      navigator.clipboard.writeText(report()).then(() => toast("Status copied."), () => toast("Couldn't copy."));
+    } }, "Copy report")) : null);
 }
 
 async function setProject(id, st) {
