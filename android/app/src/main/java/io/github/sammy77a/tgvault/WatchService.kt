@@ -77,6 +77,11 @@ class WatchService : Service() {
             } catch (e: Exception) {
                 Log.e(TAG, "watch: backup failed", e)
             }
+            try {
+                BackupWorker.ensureScheduled(applicationContext)
+            } catch (e: Exception) {
+                Log.e(TAG, "watch: couldn't check the schedule", e)
+            }
             synchronized(lock) {
                 if (!wake && running) lock.wait(CHECK_EVERY_MS)
                 wake = false

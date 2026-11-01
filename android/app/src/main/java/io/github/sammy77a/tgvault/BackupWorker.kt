@@ -1,5 +1,6 @@
 package io.github.sammy77a.tgvault
 
+import android.app.job.JobScheduler
 import android.content.Context
 import android.content.pm.ServiceInfo
 import android.os.Build
@@ -86,6 +87,19 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, params)
                 .build()
             WorkManager.getInstance(ctx).enqueueUniquePeriodicWork(PERIODIC, ExistingPeriodicWorkPolicy.UPDATE, periodic)
             watchNewMedia(ctx, ExistingWorkPolicy.REPLACE)
+        }
+
+        /**
+         * Android drops an app's scheduled jobs in several situations (an update, a
+         * cleaner), and WorkManager doesn't always notice. Puts them back when fewer
+         * than the expected two are pending.
+         */
+        fun ensureScheduled(ctx: Context) {
+            val pending = ctx.getSystemService(JobScheduler::class.java).allPendingJobs.size
+            if (pending < 2) {
+                Log.w(TAG, "only $pending background job(s) were scheduled; scheduling them again")
+                schedule(ctx)
+            }
         }
 
         /** Runs a backup soon after new photos or videos appear. Re-armed after each run. */
