@@ -85,7 +85,11 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, params)
             val periodic = PeriodicWorkRequestBuilder<BackupWorker>(15, TimeUnit.MINUTES)
                 .setConstraints(constraints(wifi, charging, false))
                 .build()
-            WorkManager.getInstance(ctx).enqueueUniquePeriodicWork(PERIODIC, ExistingPeriodicWorkPolicy.UPDATE, periodic)
+            // After Android drops the periodic job, WorkManager still believes it is
+            // scheduled and UPDATE leaves it missing; start it afresh in that case.
+            val registered = ctx.getSystemService(JobScheduler::class.java).allPendingJobs.any { it.isPeriodic }
+            val policy = if (registered) ExistingPeriodicWorkPolicy.UPDATE else ExistingPeriodicWorkPolicy.CANCEL_AND_REENQUEUE
+            WorkManager.getInstance(ctx).enqueueUniquePeriodicWork(PERIODIC, policy, periodic)
             watchNewMedia(ctx, ExistingWorkPolicy.REPLACE)
         }
 
@@ -95,9 +99,9 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, params)
          * than the expected two are pending.
          */
         fun ensureScheduled(ctx: Context) {
-            val pending = ctx.getSystemService(JobScheduler::class.java).allPendingJobs.size
-            if (pending < 2) {
-                Log.w(TAG, "only $pending background job(s) were scheduled; scheduling them again")
+            val jobs = ctx.getSystemService(JobScheduler::class.java).allPendingJobs
+            if (jobs.size < 2 || jobs.none { it.isPeriodic }) {
+                Log.w(TAG, "only ${jobs.size} background job(s) were scheduled; scheduling them again")
                 schedule(ctx)
             }
         }

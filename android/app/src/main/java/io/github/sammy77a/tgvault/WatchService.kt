@@ -52,6 +52,7 @@ class WatchService : Service() {
             contentResolver.registerContentObserver(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, true, observer)
             contentResolver.registerContentObserver(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, true, observer)
             thread(name = "tgvault-watch") { loop() }
+            thread(name = "tgvault-schedule") { keepScheduled() }
         }
         return START_STICKY
     }
@@ -77,17 +78,24 @@ class WatchService : Service() {
             } catch (e: Exception) {
                 Log.e(TAG, "watch: backup failed", e)
             }
-            try {
-                BackupWorker.ensureScheduled(applicationContext)
-            } catch (e: Exception) {
-                Log.e(TAG, "watch: couldn't check the schedule", e)
-            }
             synchronized(lock) {
                 if (!wake && running) lock.wait(CHECK_EVERY_MS)
                 wake = false
             }
             // A burst of new photos settles before the next scan.
             if (running) Thread.sleep(20_000)
+        }
+    }
+
+    /** A scan can run for minutes, so the job check has its own thread. */
+    private fun keepScheduled() {
+        while (running) {
+            try {
+                BackupWorker.ensureScheduled(applicationContext)
+            } catch (e: Exception) {
+                Log.e(TAG, "watch: couldn't check the schedule", e)
+            }
+            Thread.sleep(3 * 60 * 1000L)
         }
     }
 
