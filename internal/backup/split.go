@@ -159,6 +159,9 @@ func (e *Engine) uploadSplit(ctx context.Context, it store.Item, src string, fi 
 		e.dropPartUploads(ctx, it.CloudPath, "")
 		return outcome{state: store.StateSynced} // content already in Telegram
 	}
+	if v.Kind == store.KindFile && e.adoptMoved(ctx, it, fi.Size(), fi.ModTime().Unix(), wholeHash) {
+		return outcome{state: store.StateSynced, note: "moved; no need to upload it again"}
+	}
 	kind := "f"
 	if v.Kind == store.KindProject {
 		kind = "p"

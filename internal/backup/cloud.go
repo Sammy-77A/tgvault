@@ -990,6 +990,7 @@ func (e *Engine) deleteLocal(c FreeCandidate, v store.Version, dirs *[]freedDir)
 	e.fileChanged(abs)
 	*dirs = append(*dirs, freedDir{dir: filepath.Dir(abs), root: filepath.Clean(root.Path)})
 	_ = e.st.MarkGone([]int64{it.ID})
+	_ = e.st.MarkFreed(it.ID) // kept in Telegram on purpose; not a move
 	return ""
 }
 

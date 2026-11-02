@@ -66,6 +66,8 @@ type Engine struct {
 	cfg        Config
 	conditions Conditions
 	beatSeen   bool // the heartbeat has run since this process started
+
+	moveMu sync.Mutex // one file at a time may take over a stored copy; see adoptMoved
 }
 
 // Progress of an item being uploaded.
@@ -550,6 +552,9 @@ func (e *Engine) uploadFile(ctx context.Context, it store.Item, abs string) outc
 	}
 	if latest, ok, _ := e.st.LatestVersion(it.CloudPath); ok && latest.Hash == hash {
 		return outcome{state: store.StateSynced} // content already in Telegram
+	}
+	if e.adoptMoved(ctx, it, fi.Size(), fi.ModTime().Unix(), hash) {
+		return outcome{state: store.StateSynced, note: "moved; no need to upload it again"}
 	}
 	caption, err := meta.Caption(meta.Info{Kind: "f", Path: it.CloudPath, Size: fi.Size(), Mt: fi.ModTime().Unix(), Hash: hash, Dev: e.Device()})
 	if err != nil {

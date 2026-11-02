@@ -82,6 +82,7 @@ CREATE TABLE IF NOT EXISTS versions(
 	uploaded_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS versions_path ON versions(cloud_path);
+CREATE INDEX IF NOT EXISTS versions_hash ON versions(hash);
 CREATE TABLE IF NOT EXISTS resumes(
 	cloud_path TEXT PRIMARY KEY,
 	hash TEXT NOT NULL,
@@ -442,13 +443,37 @@ func (s *Store) MarkGone(ids []int64) error {
 		if n == 0 {
 			_, err = s.db.Exec(`DELETE FROM items WHERE id=? AND state!=?`, id, StateUploading)
 		} else {
-			_, err = s.db.Exec(`UPDATE items SET local_present=0, state=?, note='', attempts=0 WHERE id=? AND state!=?`, StateSynced, id, StateUploading)
+			_, err = s.db.Exec(`UPDATE items SET local_present=0, state=?, note='', attempts=0, changed_at=? WHERE id=? AND state!=?`, StateSynced, now(), id, StateUploading)
 		}
 		if err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// MarkFreed notes that an item left this device on purpose, with its backup
+// kept as the only copy. Such an item is never taken for a file that was moved.
+func (s *Store) MarkFreed(id int64) error {
+	_, err := s.db.Exec(`UPDATE items SET changed_at=0 WHERE id=? AND local_present=0`, id)
+	return err
+}
+
+// MovedFrom returns the newest stored file with this content that went missing
+// from this device since the given time, other than at notPath: what a file
+// that now has a new name or folder used to be called. Files freed on purpose
+// (see MarkFreed) are not offered.
+func (s *Store) MovedFrom(hash string, size int64, notPath string, since int64) ([]Version, error) {
+	return s.queryVersions(`WHERE hash=? AND size=? AND kind=? AND seq=0 AND cloud_path!=?
+		AND cloud_path IN (SELECT cloud_path FROM items WHERE local_present=0 AND kind=? AND changed_at>=? AND changed_at>0)
+		AND msg_id=(SELECT v2.msg_id FROM versions v2 WHERE v2.cloud_path=versions.cloud_path ORDER BY v2.uploaded_at DESC, v2.msg_id DESC LIMIT 1)
+		ORDER BY uploaded_at DESC, msg_id DESC`, hash, size, KindFile, notPath, KindFile, since)
+}
+
+// SetVersionMtime records a new modified time for a stored version.
+func (s *Store) SetVersionMtime(msgID int, mtime int64) error {
+	_, err := s.db.Exec(`UPDATE versions SET mtime=? WHERE msg_id=?`, mtime, msgID)
+	return err
 }
 
 // overdueRetry is how long past its retry time a failed item may wait behind
