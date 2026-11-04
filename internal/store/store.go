@@ -810,6 +810,25 @@ func (s *Store) AllVersionIDs() (map[int]bool, error) {
 	return out, rows.Err()
 }
 
+// VersionPaths returns the cloud path of every stored version, by message ID.
+func (s *Store) VersionPaths() (map[int]string, error) {
+	rows, err := s.db.Query(`SELECT msg_id, cloud_path FROM versions`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int]string{}
+	for rows.Next() {
+		var id int
+		var p string
+		if err := rows.Scan(&id, &p); err != nil {
+			return nil, err
+		}
+		out[id] = p
+	}
+	return out, rows.Err()
+}
+
 // ClearCloud forgets all cloud versions and resume state (used on logout).
 func (s *Store) ClearCloud() error {
 	for _, q := range []string{`DELETE FROM versions`, `DELETE FROM parts`, `DELETE FROM part_uploads`, `DELETE FROM resumes`,

@@ -91,6 +91,12 @@ func (e *Engine) reconcileOnce(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	// A file moved or renamed from another device has a new path in its
+	// caption; the versions already known here follow it.
+	knownPath, err := e.st.VersionPaths()
+	if err != nil {
+		return 0, err
+	}
 	seen := map[int]bool{}
 	paths := map[string]bool{}
 	groups := map[string][]partMsg{} // parts of split files, by upload
@@ -112,7 +118,7 @@ func (e *Engine) reconcileOnce(ctx context.Context) (int, error) {
 		seen[rf.MsgID] = true
 		paths[in.Path] = true
 		if known[rf.MsgID] {
-			return nil
+			return e.followMove(rf.MsgID, knownPath[rf.MsgID], in.Path)
 		}
 		return e.st.AddVersion(versionFromCaption(rf.MsgID, rf.Date, in))
 	})
@@ -121,7 +127,7 @@ func (e *Engine) reconcileOnce(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	// A split file counts only when every part is there.
-	split, err := e.reconcileGroups(ctx, groups, paths, known, bases)
+	split, err := e.reconcileGroups(ctx, groups, paths, known, knownPath, bases)
 	if err != nil {
 		return 0, err
 	}
@@ -152,6 +158,15 @@ func (e *Engine) reconcileOnce(ctx context.Context) (int, error) {
 		e.prune(ctx, p)
 	}
 	return len(paths), nil
+}
+
+// followMove gives a known version the path its caption now has.
+func (e *Engine) followMove(msgID int, have, now string) error {
+	if have == now {
+		return nil
+	}
+	log.Printf("reconcile: %s is now %s", have, now)
+	return e.st.MoveVersion(msgID, now)
 }
 
 // ---- browsing ----

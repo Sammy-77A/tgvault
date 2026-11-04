@@ -648,7 +648,7 @@ func (e *Engine) addSplitFromLastPart(ctx context.Context, last tgclient.RemoteF
 // cleans up parts that can never be used. It returns the version IDs found.
 // bases are messages that project change ZIPs name as their full ZIP: when a
 // part was posted twice, the copy they name is the one kept.
-func (e *Engine) reconcileGroups(ctx context.Context, groups map[string][]partMsg, paths map[string]bool, known, bases map[int]bool) (map[int]bool, error) {
+func (e *Engine) reconcileGroups(ctx context.Context, groups map[string][]partMsg, paths map[string]bool, known map[int]bool, knownPath map[int]string, bases map[int]bool) (map[int]bool, error) {
 	pending, err := e.st.PartUploadIDs()
 	if err != nil {
 		return nil, err
@@ -674,6 +674,8 @@ func (e *Engine) reconcileGroups(ctx context.Context, groups map[string][]partMs
 				if err := e.st.AddSplitVersion(v, parts); err != nil {
 					return nil, err
 				}
+			} else if err := e.followMove(v.MsgID, knownPath[v.MsgID], v.CloudPath); err != nil {
+				return nil, err
 			}
 			continue
 		}

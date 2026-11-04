@@ -259,3 +259,46 @@ func TestReadOnlyEngineCannotChangeTelegram(t *testing.T) {
 		t.Errorf("reading must still work: %q %v", sb.String(), err)
 	}
 }
+
+// A second device (its own database, the same channel) follows a move when it
+// next checks Telegram, for ordinary and split files.
+func TestOtherDeviceFollowsAMove(t *testing.T) {
+	tg := newFakeTG()
+	a, st := newSplitEngine(t, tg)
+	dir := t.TempDir()
+	root, _ := st.AddRoot(dir, "R")
+	write(t, filepath.Join(dir, "small.txt"), "small file")
+	write(t, filepath.Join(dir, "big.mkv"), string(randomBytes(t, testSplitAt*2+10)))
+	syncAll(t, a, st, root)
+
+	b, _ := newSplitEngine(t, tg) // the other device
+	if _, err := b.reconcileOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(versionsAt(t, b.st, "R/small.txt")) != 1 || len(versionsAt(t, b.st, "R/big.mkv")) != 1 {
+		t.Fatal("setup: the other device should know both files")
+	}
+	big := versionsAt(t, b.st, "R/big.mkv")[0]
+
+	if err := os.MkdirAll(filepath.Join(dir, "sorted"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"small.txt", "big.mkv"} {
+		if err := os.Rename(filepath.Join(dir, n), filepath.Join(dir, "sorted", n)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	syncAll(t, a, st, root) // relabelled, not uploaded again
+
+	if _, err := b.reconcileOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"small.txt", "big.mkv"} {
+		if len(versionsAt(t, b.st, "R/"+n)) != 0 || len(versionsAt(t, b.st, "R/sorted/"+n)) != 1 {
+			t.Errorf("%s: the other device should now list it under sorted/", n)
+		}
+	}
+	if got := versionsAt(t, b.st, "R/sorted/big.mkv")[0]; got.MsgID != big.MsgID || got.Parts != big.Parts {
+		t.Errorf("the split file changed identity: %+v vs %+v", got, big)
+	}
+}
