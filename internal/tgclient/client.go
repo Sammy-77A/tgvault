@@ -911,7 +911,27 @@ func friendly(err error) string {
 	if d, ok := tgerr.AsFloodWait(err); ok {
 		return fmt.Sprintf("Telegram asked to wait %s before trying again", d.Round(time.Second))
 	}
+	if _, rpc := tgerr.As(err); !rpc && connectionTrouble(err) {
+		return "lost the connection to Telegram; check the internet connection and try again"
+	}
 	return err.Error()
+}
+
+// connectionTrouble reports whether err is the network or connection failing,
+// whose own wording ("rpcDoRequest: retryUntilAck: retry limit reached...") means
+// nothing to most people.
+func connectionTrouble(err error) bool {
+	if staleConn(err) {
+		return true
+	}
+	s := strings.ToLower(err.Error())
+	for _, frag := range []string{"retry limit reached", "waitsession", "i/o timeout", "no such host", "connection refused",
+		"network is unreachable", "context deadline exceeded", "client closed", "not connected to telegram", "tls handshake"} {
+		if strings.Contains(s, frag) {
+			return true
+		}
+	}
+	return false
 }
 
 // deadSession reports whether Telegram has ended this login for good, so the

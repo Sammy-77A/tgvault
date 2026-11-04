@@ -15,7 +15,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gotd/td/telegram/downloader"
 	"github.com/gotd/td/telegram/query"
 	"github.com/gotd/td/telegram/query/messages"
 	"github.com/gotd/td/tg"
@@ -30,6 +29,9 @@ const (
 	bigFileLimit  = 10 * 1024 * 1024
 	uploadThreads = 4
 )
+
+// errGone means the message or its file has been deleted from the channel.
+var errGone = errors.New("this file is no longer in the Telegram channel")
 
 // ErrPartsExpired means Telegram no longer has the parts of a resumed upload.
 var ErrPartsExpired = errors.New("upload parts expired")
@@ -428,29 +430,6 @@ func (c *Client) Exists(ctx context.Context, ids []int) (map[int]RemoteFile, err
 	return c.getDocs(ctx, ids)
 }
 
-// Download writes a stored file to w.
-func (c *Client) Download(ctx context.Context, msgID int, w io.Writer) error {
-	docs, err := c.getDocs(ctx, []int{msgID})
-	if err != nil {
-		return err
-	}
-	rf, ok := docs[msgID]
-	if !ok {
-		return errors.New("this file is no longer in the Telegram channel")
-	}
-	api, _, err := c.conn()
-	if err != nil {
-		return err
-	}
-	loc := &tg.InputDocumentFileLocation{
-		ID:            rf.doc.ID,
-		AccessHash:    rf.doc.AccessHash,
-		FileReference: rf.doc.FileReference,
-	}
-	_, err = downloader.NewDownloader().Download(api, loc).WithThreads(4).Stream(ctx, w)
-	return err
-}
-
 // BlockSize is how much ReadBlock returns at a time: Telegram hands out files
 // in 1 MB pieces at 1 MB boundaries.
 const BlockSize = 1 << 20
@@ -503,7 +482,7 @@ func (c *Client) fileLoc(ctx context.Context, msgID int, refresh bool) (fileLoc,
 	}
 	rf, ok := docs[msgID]
 	if !ok {
-		return fileLoc{}, errors.New("this file is no longer in the Telegram channel")
+		return fileLoc{}, errGone
 	}
 	fl := fileLoc{loc: &tg.InputDocumentFileLocation{ID: rf.doc.ID, AccessHash: rf.doc.AccessHash,
 		FileReference: rf.doc.FileReference}, size: rf.Size, at: time.Now()}
