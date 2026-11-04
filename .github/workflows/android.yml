@@ -56,10 +56,27 @@ jobs:
           gradle -p android assembleRelease --no-daemon
           cp android/app/build/outputs/apk/release/app-release.apk tgvault-test.apk
 
+      # The library app: the same code, but it only shows and downloads one
+      # folder of the backup, for sharing it with someone. The folder is the
+      # repository variable LIBRARY_FOLDER (Settings > Variables), "Movies" if unset.
+      - name: Build the library APK
+        env:
+          LIBRARY_FOLDER: ${{ vars.LIBRARY_FOLDER || 'Movies' }}
+          TGVAULT_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          TGVAULT_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          TGVAULT_VERSION_CODE: ${{ github.run_number }}
+          TGVAULT_VERSION_NAME: 0.2.0-test.${{ github.run_number }}
+        run: |
+          export TGVAULT_KEYSTORE="$RUNNER_TEMP/release.p12"
+          gradle -p android assembleRelease --no-daemon -PlibraryFolder="$LIBRARY_FOLDER"
+          cp android/app/build/outputs/apk/release/app-release.apk tgvault-library.apk
+
       - uses: actions/upload-artifact@v7
         with:
           name: tgvault-apk
-          path: tgvault-test.apk
+          path: |
+            tgvault-test.apk
+            tgvault-library.apk
 
       - name: Publish to the "android-test" pre-release
         if: github.ref == 'refs/heads/main'
@@ -69,7 +86,7 @@ jobs:
           gh release view android-test >/dev/null 2>&1 || \
             gh release create android-test --prerelease --title "Android test build" \
               --notes "Latest test build of the tgvault Android app. Open this page on the phone and tap tgvault-test.apk to install or update."
-          gh release upload android-test tgvault-test.apk --clobber
+          gh release upload android-test tgvault-test.apk tgvault-library.apk --clobber
           gh release edit android-test --notes "Latest test build of the tgvault Android app (build ${{ github.run_number }}, commit ${GITHUB_SHA::7}). Open this page on the phone and tap tgvault-test.apk to install or update.
 
           versionCode: ${{ github.run_number }}"

@@ -13,6 +13,7 @@ import kotlin.concurrent.thread
  */
 class ReviveReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        if (Core.library) return
         val pending = goAsync()
         thread(name = "tgvault-revive") {
             try {

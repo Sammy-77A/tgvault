@@ -228,3 +228,34 @@ func waitTasks(t *testing.T, e *Engine) {
 	}
 	t.Fatal("a task did not finish")
 }
+
+func TestReadOnlyEngineCannotChangeTelegram(t *testing.T) {
+	tg := newFakeTG()
+	e, st := newSplitEngine(t, tg)
+	dir := t.TempDir()
+	root, _ := st.AddRoot(dir, "R")
+	write(t, filepath.Join(dir, "a.txt"), "hello")
+	syncAll(t, e, st, root)
+	v := versionsAt(t, st, "R/a.txt")[0]
+
+	e.ReadOnly()
+	ctx := context.Background()
+	if err := e.tg.DeleteMessages(ctx, []int{v.MsgID}); err == nil {
+		t.Error("deleting must fail")
+	}
+	if err := e.tg.EditCaption(ctx, v.MsgID, "x"); err == nil {
+		t.Error("editing must fail")
+	}
+	write(t, filepath.Join(dir, "b.txt"), "new")
+	syncAll(t, e, st, root)
+	if tg.calls != 1 {
+		t.Errorf("uploading must fail, but %d uploads happened", tg.calls)
+	}
+	if _, ok := tg.msgs[v.MsgID]; !ok {
+		t.Error("the stored file must still be in Telegram")
+	}
+	var sb strings.Builder
+	if err := e.DownloadTo(ctx, v, &sb); err != nil || sb.String() != "hello" {
+		t.Errorf("reading must still work: %q %v", sb.String(), err)
+	}
+}

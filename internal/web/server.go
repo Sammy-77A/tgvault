@@ -63,6 +63,7 @@ type Server struct {
 	phone   *Phone         // set when running on a phone
 	shares  shareDirs      // folders for files being shared or opened (phone)
 	plays   playKeys       // links handed to video players
+	library string         // set in the library app: the only folder it shows
 }
 
 // SetPairing shows the "log in from your PC" details while logged out.
@@ -134,6 +135,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
+	}
+	if s.library != "" && !s.libraryGate(w, r) {
+		return
 	}
 	s.mux.ServeHTTP(w, r)
 }
@@ -286,6 +290,7 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 		"phone":      s.phoneState(),
 		"cloudStamp": s.st.VersionStamp(),
 		"thumbBytes": s.eng.ThumbBytes(),
+		"library":    s.library,
 	})
 }
 

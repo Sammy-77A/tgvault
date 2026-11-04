@@ -30,6 +30,9 @@ object Core {
     /** The network the whole app is pinned to (see TgvaultApp.pin). */
     @Volatile var pinned: android.net.Network? = null
 
+    /** True in the library app (see build.gradle.kts): it only shows and downloads one folder. */
+    val library: Boolean get() = BuildConfig.LIBRARY_FOLDER.isNotEmpty()
+
     fun dataDir(ctx: Context) = File(ctx.filesDir, "tgvault").absolutePath
 
     /** Starts tgvault if needed and returns its page URL. Call off the main thread. */
@@ -38,6 +41,7 @@ object Core {
         url?.let { return it }
         val app = ctx.applicationContext
         val storage = Environment.getExternalStorageDirectory().absolutePath
+        if (library) Mobile.setLibrary(BuildConfig.LIBRARY_FOLDER)
         val u = Mobile.start(dataDir(app), storage, AndroidHost(app))
         url = u
         Mobile.setForeground(foreground)

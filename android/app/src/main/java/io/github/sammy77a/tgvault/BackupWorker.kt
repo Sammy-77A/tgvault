@@ -80,6 +80,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, params)
 
         /** Schedules background backups with the current settings. Call after Core.start. */
         fun schedule(ctx: Context) {
+            if (Core.library) return // the library app backs nothing up
             val wifi = Mobile.wifiOnly()
             val charging = Mobile.chargingOnly()
             val periodic = PeriodicWorkRequestBuilder<BackupWorker>(15, TimeUnit.MINUTES)

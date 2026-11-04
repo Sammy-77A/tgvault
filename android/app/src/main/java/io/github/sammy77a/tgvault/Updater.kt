@@ -16,6 +16,7 @@ object Updater {
     private const val DAY_MS = 24L * 60 * 60 * 1000
 
     fun checkDaily(ctx: Context) {
+        if (Core.library) return
         val prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val now = System.currentTimeMillis()
         if (now - prefs.getLong("lastCheck", 0) < DAY_MS) return
@@ -25,6 +26,7 @@ object Updater {
 
     /** Returns the release page if a newer build exists, after notifying. Call off the main thread. */
     fun check(ctx: Context): String? {
+        if (Core.library) return null // updates to the library app are sent by hand
         return try {
             val info = ctx.packageManager.getPackageInfo(ctx.packageName, 0)
             @Suppress("DEPRECATION")

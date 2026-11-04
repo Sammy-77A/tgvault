@@ -182,6 +182,22 @@ function reportFinishedTasks() {
   tasksSeeded = true;
 }
 
+// The library app (a friend's copy) shows one folder of the backup and nothing
+// else; the server refuses everything but looking and downloading anyway.
+const library = () => (state && state.library) || "";
+
+function renderLibrary() {
+  const lib = library();
+  if (cloudPath !== lib && !cloudPath.startsWith(lib + "/")) cloudPath = lib;
+  if (tab !== "cloud") showTab("cloud");
+  renderTasks(state.engine);
+  const banner = $("libBanner");
+  const need = state.phone && !state.phone.permissions.storage;
+  banner.hidden = !need;
+  replace(banner, need ? el("p", {}, "Allow access to files, so downloads can be saved to your phone.") : null,
+    need ? el("a", { class: "btn primary", href: "tgvault://perm/storage" }, "Allow access to files") : null);
+}
+
 function render() {
   const tg = state.telegram;
   // A logged-in phone disconnects while in the background; keep showing the
@@ -203,7 +219,9 @@ function render() {
     $("connText").textContent = "Not logged in";
   }
 
+  document.body.classList.toggle("library", !!library());
   if (!ready) return renderLogin(tg);
+  if (library()) return renderLibrary();
   renderOverview();
   renderSettings();
   const failed = state.engine.counts.failed || 0;
@@ -341,6 +359,21 @@ async function addSuggested() {
   refresh();
 }
 
+// Tasks (downloads, restores, freeing space), shown above every tab.
+function renderTasks(e) {
+  replace($("tasks"), (e.tasks || []).map((t) => {
+    const pct = t.total ? Math.round((t.done / t.total) * 100) : 0;
+    return el("div", { class: "card" },
+      el("div", { class: "row-head" },
+        el("h2", {}, t.title, t.finished ? " — done" : ""),
+        t.finished ? el("button", { class: "small", onclick: () => api(`/api/tasks/${t.id}/dismiss`, {}).then(refresh) }, "Dismiss") : null),
+      el("div", { class: "sub" }, t.finished ? `${t.done} of ${t.total} handled` : `${t.done} of ${t.total} — ${t.current || ""}`),
+      t.finished ? null : el("div", { class: "progress" }, el("div", { style: `width:${pct}%` })),
+      (t.errors || []).length ? el("ul", { class: "scroll error" }, t.errors.map((x) => el("li", {}, x))) : null,
+      (t.notes || []).length ? el("ul", { class: "scroll" }, t.notes.map((x) => el("li", {}, x))) : null);
+  }));
+}
+
 function renderOverview() {
   const e = state.engine;
   const c = e.counts;
@@ -390,18 +423,7 @@ function renderOverview() {
   renderPhoneBanner();
   renderSuggestions();
 
-  // Tasks (restores, freeing space)
-  replace($("tasks"), (e.tasks || []).map((t) => {
-    const pct = t.total ? Math.round((t.done / t.total) * 100) : 0;
-    return el("div", { class: "card" },
-      el("div", { class: "row-head" },
-        el("h2", {}, t.title, t.finished ? " — done" : ""),
-        t.finished ? el("button", { class: "small", onclick: () => api(`/api/tasks/${t.id}/dismiss`, {}).then(refresh) }, "Dismiss") : null),
-      el("div", { class: "sub" }, t.finished ? `${t.done} of ${t.total} handled` : `${t.done} of ${t.total} — ${t.current || ""}`),
-      t.finished ? null : el("div", { class: "progress" }, el("div", { style: `width:${pct}%` })),
-      (t.errors || []).length ? el("ul", { class: "scroll error" }, t.errors.map((x) => el("li", {}, x))) : null,
-      (t.notes || []).length ? el("ul", { class: "scroll" }, t.notes.map((x) => el("li", {}, x))) : null);
-  }));
+  renderTasks(e);
 
   // Projects waiting for a decision
   const suggested = (state.projects || []).filter((p) => p.state === "suggested");
@@ -675,11 +697,14 @@ function sortEntries(list) {
 }
 
 function renderCloud() {
-  const parts = cloudPath ? cloudPath.split("/") : [];
-  const crumbs = [el("button", { onclick: () => openCloud("") }, "All backups")];
+  // The library app starts at its folder, which has no "All backups" above it.
+  const base = library();
+  const rest = base ? cloudPath.slice(base.length).replace(/^\//, "") : cloudPath;
+  const parts = rest ? rest.split("/") : [];
+  const crumbs = [el("button", { onclick: () => openCloud(base) }, base ? base.split("/").pop() : "All backups")];
   parts.forEach((p, i) => {
     crumbs.push(el("span", {}, "/"));
-    const target = parts.slice(0, i + 1).join("/");
+    const target = [base, ...parts.slice(0, i + 1)].filter(Boolean).join("/");
     crumbs.push(el("button", { onclick: () => openCloud(target) }, p));
   });
   replace($("crumbs"), crumbs);
@@ -710,16 +735,16 @@ function cloudRow(e) {
   const targets = () => (cloud.selected.has(e.path) && cloud.selected.size > 1 ? [...cloud.selected.values()] : [e]);
   const actions = isFolder ? [] : [
     e.kind === "file" && !isZip(e) ? el("button", { class: "small", onclick: (ev) => { ev.stopPropagation(); openViewer(e); } }, "View") : null,
-    isZip(e) ? el("button", { class: "small", onclick: (ev) => { ev.stopPropagation(); openZip(e); } }, "Open") : null,
+    isZip(e) && !library() ? el("button", { class: "small", onclick: (ev) => { ev.stopPropagation(); openZip(e); } }, "Open") : null,
     el("button", { class: "small", "data-label": "Download", onclick: (ev) => { ev.stopPropagation(); bulkDownload(targets()); } }, "Download"),
-    el("button", { class: "small", "data-label": "Restore", onclick: (ev) => { ev.stopPropagation(); restore(targets()); } }, "Restore"),
-    e.versions > 1 ? el("button", { class: "small", onclick: (ev) => { ev.stopPropagation(); showVersions(e); } }, "Versions") : null,
+    library() ? null : el("button", { class: "small", "data-label": "Restore", onclick: (ev) => { ev.stopPropagation(); restore(targets()); } }, "Restore"),
+    e.versions > 1 && !library() ? el("button", { class: "small", onclick: (ev) => { ev.stopPropagation(); showVersions(e); } }, "Versions") : null,
   ];
   return el("li", pickRow(cloud, e, {
     class: isFolder ? "clickable" : "",
     ondblclick: (ev) => {
       if (ev.target.closest("button, input, a")) return;
-      if (isZip(e)) openZip(e);
+      if (isZip(e)) { if (!library()) openZip(e); }
       else if (e.kind === "file") openViewer(e);
     },
   }),
@@ -1020,7 +1045,10 @@ function renderSelection() {
   $("selCount").textContent = n ? `${n.toLocaleString()} selected` : "Select all";
   const anyHere = sel.some((e) => !otherDevice(e.path));
   const anyLocal = sel.some((e) => e.local === "same" || e.local === "mixed" || e.kind === "folder");
-  replace($("selActions"), n ? [
+  replace($("selActions"), n && library() ? [
+    el("button", { class: "small primary", onclick: () => bulkDownload(sel) }, "Download"),
+    el("button", { class: "small link", onclick: () => { cloud.selected.clear(); renderCloud(); } }, "Clear"),
+  ] : n ? [
     el("button", { class: "small primary", onclick: () => bulkDownload(sel) }, "Download"),
     el("button", { class: "small", onclick: () => restore(sel) }, "Restore"),
     el("button", { class: "small", onclick: () => copyTo(sel) }, "Copy to…"),

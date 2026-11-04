@@ -6,12 +6,19 @@ plugins {
 // Release signing comes from GitHub secrets (see .github/workflows/android.yml).
 val keystorePath: String? = System.getenv("TGVAULT_KEYSTORE")
 
+// The library app, for sharing one folder of the backup with someone, is this
+// same code built with -PlibraryFolder=<folder of the backup>, e.g. Movies. It
+// installs next to the normal app and can only browse and download that folder.
+val libraryFolder: String = (findProperty("libraryFolder") as String?) ?: ""
+
 android {
     namespace = "io.github.sammy77a.tgvault"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "io.github.sammy77a.tgvault"
+        applicationId = "io.github.sammy77a.tgvault" + if (libraryFolder.isEmpty()) "" else ".library"
+        buildConfigField("String", "LIBRARY_FOLDER", "\"$libraryFolder\"")
+        manifestPlaceholders["appLabel"] = if (libraryFolder.isEmpty()) "tgvault" else libraryFolder.substringAfterLast('/')
         minSdk = 26
         targetSdk = 35
         versionCode = (System.getenv("TGVAULT_VERSION_CODE") ?: "1").toInt()
@@ -35,6 +42,10 @@ android {
             isMinifyEnabled = false
             if (keystorePath != null) signingConfig = signingConfigs.getByName("release")
         }
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     compileOptions {

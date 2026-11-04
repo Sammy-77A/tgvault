@@ -114,6 +114,7 @@ class WatchService : Service() {
 
         /** Starts the watch service; quietly does nothing if Android doesn't allow it now. */
         fun start(ctx: Context) {
+            if (Core.library) return
             try {
                 ctx.startForegroundService(Intent(ctx, WatchService::class.java))
             } catch (e: Exception) {

@@ -28,6 +28,7 @@ type Options struct {
 	Version  string
 	Pairing  bool // let a logged-in PC log this device in over the local network
 	Phone    *PhoneOptions
+	Library  string // the library app: only this folder of the backup can be browsed and downloaded
 }
 
 // PhoneOptions are set when tgvault runs inside the Android app.
@@ -87,6 +88,11 @@ func Start(ctx context.Context, o Options) (*App, error) {
 			nw.SetSender(func(title, body, _ string) error { p.Notify(title, body); return nil })
 		}
 		o.Pairing = true
+	}
+	if o.Library != "" {
+		srv.SetLibrary(o.Library)
+		eng.ReadOnly()
+		o.Pairing = false // nothing in the library app opens to the local network
 	}
 	if o.Pairing {
 		pl := pair.NewListener(tg)

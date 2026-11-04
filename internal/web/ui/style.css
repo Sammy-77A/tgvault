@@ -347,3 +347,7 @@ body.viewing > .jump.page { display: none; }
 .health li .hint { margin: .15rem 0 0; }
 .health .gaps { margin-top: .5rem; }
 .health .actions { margin-top: .75rem; }
+
+/* The library app (a friend's copy) shows the file list and nothing else. */
+.library .tabs, .library [data-panel="overview"], .library [data-panel="space"],
+.library [data-panel="activity"], .library [data-panel="settings"] { display: none; }

@@ -57,7 +57,16 @@ type Host interface {
 var (
 	mu      sync.Mutex
 	running *app.App
+	library string // set for the library app
 )
+
+// SetLibrary makes this the library app, which only shows and downloads one
+// folder of the backup (a path such as "Movies"). Call it before Start.
+func SetLibrary(folder string) {
+	mu.Lock()
+	defer mu.Unlock()
+	library = folder
+}
 
 // Start runs tgvault with its data in dataDir and returns the page's URL.
 // storageRoot is the phone's shared storage. Calling Start again while
@@ -91,7 +100,7 @@ func Start(dataDir, storageRoot string, host Host) (string, error) {
 		return "", err
 	}
 	a, err := app.Start(context.Background(), app.Options{
-		DataDir: dataDir, Listener: l, Token: hex.EncodeToString(buf), Version: Version,
+		DataDir: dataDir, Listener: l, Token: hex.EncodeToString(buf), Version: Version, Library: library,
 		Phone: &app.PhoneOptions{StorageRoot: storageRoot, FileChanged: host.FileChanged, Notify: host.ShowNotification,
 			Share: func(paths []string) { host.ShareFiles(strings.Join(paths, "\n")) }, Open: host.OpenFile},
 	})
