@@ -7,12 +7,22 @@ itself.
 
 ## How it works
 
-- It is the normal app built with `-PlibraryFolder=<folder>`; CI builds it on
-  every push as `tgvault-library.apk` on the
-  [android-test release](https://github.com/Sammy-77A/tgvault/releases/tag/android-test).
-  The folder is the repository variable `LIBRARY_FOLDER` (Settings → Secrets and
-  variables → Actions → Variables); it is `Movies` if unset. It is the folder's
+- It is the normal app built with `-PlibraryFolder=<folder>`, but it has its own
+  pipeline and its own release, apart from the normal app's: the `library`
+  workflow (`.github/workflows/library.yml`) builds it **only when you start it**
+  (Actions → library → Run workflow, or by pushing a tag like `library-1`), and
+  publishes `tgvault-library.apk` on the
+  [android-library release](https://github.com/Sammy-77A/tgvault/releases/tag/android-library).
+  Pushes to `main` build only the normal app, so the two never disturb each other:
+  the normal app's update notice only follows its own `android-test` release.
+  The install link is
+  `https://github.com/Sammy-77A/tgvault/releases/download/android-library/tgvault-library.apk`.
+- The folder is the repository variable `LIBRARY_FOLDER` (Settings → Secrets and
+  variables → Actions → Variables), or the `folder` you type when starting the
+  workflow; it is `Movies` if neither is set. It is the folder's
   name in the backup, such as the label of a PC folder, or a path like `Movies/Action`.
+- Its version number counts from 1000 on its own, so it is always above the
+  builds that used to come out of the normal pipeline, and Android installs it as an update.
 - It installs next to the normal app (package `io.github.sammy77a.tgvault.library`)
   and is named after the folder.
 - The app's local server refuses everything except signing in, browsing, searching,

@@ -1,0 +1,95 @@
+name: library
+
+# The library app: the same code as the normal app, but it only shows and
+# downloads one folder of the backup, for sharing it with someone. It has its
+# own release ("android-library") and is built only when started by hand, or by
+# pushing a tag like library-1, so a push to main never touches it, and it
+# never touches the normal app's "android-test" release (the normal app's
+# update notice follows that one).
+on:
+  workflow_dispatch:
+    inputs:
+      folder:
+        description: "Folder of the backup to show (default: the repository variable LIBRARY_FOLDER, else Movies)"
+        required: false
+        default: ""
+  push:
+    tags: ["library-*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: library
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Go tests
+        run: go test ./...
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Build the Go library for Android
+        env:
+          VERSION: 0.2.0-lib.${{ github.run_number }}
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          go install golang.org/x/mobile/cmd/gomobile golang.org/x/mobile/cmd/gobind
+          gomobile init
+          mkdir -p android/app/libs
+          gomobile bind -target=android/arm64 -androidapi 26 \
+            -ldflags "-s -w -X github.com/Sammy-77A/tgvault/mobile.Version=$VERSION" \
+            -o android/app/libs/tgvault.aar ./mobile
+
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: "8.11.1"
+
+      # The version number counts on its own from 1000: it must stay above the
+      # builds that used to come out of the normal app's pipeline (up to a few
+      # hundred), or Android would refuse to install this as an update.
+      - name: Build the library APK
+        env:
+          FOLDER: ${{ inputs.folder || vars.LIBRARY_FOLDER || 'Movies' }}
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          TGVAULT_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          TGVAULT_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          RUN: ${{ github.run_number }}
+        run: |
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.p12"
+          export TGVAULT_KEYSTORE="$RUNNER_TEMP/release.p12"
+          export TGVAULT_VERSION_CODE=$((1000 + RUN))
+          export TGVAULT_VERSION_NAME="0.2.0-lib.$RUN"
+          gradle -p android assembleRelease --no-daemon -PlibraryFolder="$FOLDER"
+          cp android/app/build/outputs/apk/release/app-release.apk tgvault-library.apk
+          echo "FOLDER=$FOLDER" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tgvault-library-apk
+          path: tgvault-library.apk
+
+      - name: Publish to the "android-library" pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view android-library >/dev/null 2>&1 || \
+            gh release create android-library --prerelease --title "Library app" \
+              --notes "The tgvault library app."
+          gh release upload android-library tgvault-library.apk --clobber
+          gh release edit android-library --notes "The tgvault library app: shows and downloads only the folder \"$FOLDER\" of the backup (build ${{ github.run_number }}, commit ${GITHUB_SHA::7}). Open this page on the phone and tap tgvault-library.apk to install or update. It is released on its own, apart from the normal tgvault app.
+
+          versionCode: $((1000 + ${{ github.run_number }}))"
