@@ -166,7 +166,11 @@ func (e *Engine) followMove(msgID int, have, now string) error {
 		return nil
 	}
 	log.Printf("reconcile: %s is now %s", have, now)
-	return e.st.MoveVersion(msgID, now)
+	if err := e.st.MoveVersion(msgID, now); err != nil {
+		return err
+	}
+	e.followLocal(have, now)
+	return nil
 }
 
 // ---- browsing ----
@@ -251,6 +255,19 @@ func (e *Engine) List(prefix string) ([]Entry, error) {
 		out = append(out, Entry{Name: rest, Path: v.CloudPath, Kind: kind, Size: e.shownSize(v), Mtime: v.Mtime,
 			Versions: counts[v.CloudPath], Local: local, MsgID: v.MsgID, Uploaded: v.UploadedAt,
 			Device: meta.DeviceOf(v.CloudPath), Type: meta.FileType(rest), Parts: v.Parts, Changes: v.Seq})
+	}
+	// Folders made on purpose that have nothing in them yet.
+	recorded, _ := e.st.FoldersUnder(prefix)
+	for _, f := range recorded {
+		rest := f
+		if prefix != "" {
+			rest = strings.TrimPrefix(f, prefix+"/")
+		}
+		name, _, _ := strings.Cut(rest, "/")
+		if folders[name] == nil {
+			folders[name] = &Entry{Name: name, Path: path.Join(prefix, name), Kind: "folder", Local: "same",
+				Device: meta.DeviceOf(f)}
+		}
 	}
 	for _, f := range folders {
 		out = append(out, *f)
@@ -799,7 +816,20 @@ func (e *Engine) DeleteFromCloudMany(ctx context.Context, prefixes []string) (in
 		return 0, err
 	}
 	if len(versions) == 0 {
-		return 0, errors.New("nothing stored there")
+		// An empty folder made on purpose is only a note here.
+		empty := false
+		for _, prefix := range prefixes {
+			if fs, _ := e.st.FoldersAt(prefix); len(fs) > 0 {
+				empty = true
+				_ = e.st.DropFolders(prefix)
+			}
+		}
+		if !empty {
+			return 0, errors.New("nothing stored there")
+		}
+		t := e.newTask("delete", "Removing "+describe(prefixes)+" from the backup")
+		t.update(func(t *Task) { t.Finished = true })
+		return t.ID, nil
 	}
 	t := e.newTask("delete", "Removing "+describe(prefixes)+" from the backup")
 	t.update(func(t *Task) { t.Total = len(versions) })
@@ -831,6 +861,7 @@ func (e *Engine) DeleteFromCloudMany(ctx context.Context, prefixes []string) (in
 		}
 		for _, prefix := range prefixes {
 			_ = e.st.ForgetGoneUnder(prefix)
+			_ = e.st.DropFolders(prefix)
 		}
 		t.update(func(t *Task) { t.Finished = true })
 	}()

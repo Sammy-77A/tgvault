@@ -53,13 +53,16 @@ function when(unix) {
 }
 
 let toastTimer;
-function toast(msg) {
+// toast shows a short message; action is {label, fn} for a button on it
+// (such as Undo), which keeps it up longer.
+function toast(msg, action) {
   const t = $("toast");
   t.textContent = msg;
+  if (action) t.append(" ", el("button", { type: "button", class: "small", onclick: () => { t.hidden = true; action.fn(); } }, action.label));
   t.hidden = false;
   clearTimeout(toastTimer);
   // Long messages (usually errors) stay up long enough to read.
-  toastTimer = setTimeout(() => { t.hidden = true; }, Math.min(12000, 4000 + msg.length * 50));
+  toastTimer = setTimeout(() => { t.hidden = true; }, action ? 15000 : Math.min(12000, 4000 + msg.length * 50));
 }
 
 function replace(node, ...children) {
@@ -161,12 +164,15 @@ async function refresh() {
 
 // Tell the user when a task (download, restore, …) ends, with any errors.
 const reportedTasks = new Set();
+const undoers = new Map(); // task id -> what undoes it (moves and renames)
+let dragging = []; // the rows being dragged onto a folder
 let tasksSeeded = false;
 function reportFinishedTasks() {
   for (const t of state.engine.tasks || []) {
     if (!t.finished || reportedTasks.has(t.id)) continue;
     reportedTasks.add(t.id);
     if (!tasksSeeded) continue; // finished before this page opened
+    if (t.kind === "move" && tab === "cloud") loadCloud(); // folders can change without any file changing
     if ((t.errors || []).length) {
       const list = t.errors.slice(0, 20);
       dialog({
@@ -175,6 +181,9 @@ function reportFinishedTasks() {
           t.errors.length > list.length ? el("p", { class: "hint" }, `…and ${t.errors.length - list.length} more, listed at the top of the page.`) : null),
         buttons: [{ label: "OK", value: null }],
       });
+    } else if (undoers.has(t.id)) {
+      toast(`${t.title} — done.`, { label: "Undo", fn: undoers.get(t.id) });
+      undoers.delete(t.id);
     } else {
       toast(`${t.title} — done.${(t.notes || []).length ? " " + t.notes[t.notes.length - 1] : ""}`);
     }
@@ -716,6 +725,7 @@ function renderCloud() {
   $("cloudEmpty").hidden = cloud.entries.length > 0;
   $("cloudEmpty").textContent = cloud.searching ? "Nothing matches." : "Nothing here yet.";
   $("cloudDir").textContent = cloud.desc ? "↓" : "↑";
+  $("cloudNewFolder").hidden = library() || cloud.searching || !cloudPath || otherDevice(cloudPath);
 
   cloud.order = sortEntries(cloud.entries);
   replaceRows(cloud, cloud.order.map(cloudRow));
@@ -740,7 +750,31 @@ function cloudRow(e) {
     library() ? null : el("button", { class: "small", "data-label": "Restore", onclick: (ev) => { ev.stopPropagation(); restore(targets()); } }, "Restore"),
     e.versions > 1 && !library() ? el("button", { class: "small", onclick: (ev) => { ev.stopPropagation(); showVersions(e); } }, "Versions") : null,
   ];
+  // On a PC, rows can be dragged onto a folder to move them there.
+  const drag = library() || onPhone ? {} : {
+    draggable: "true",
+    ondragstart: (ev) => {
+      dragging = targets();
+      ev.dataTransfer.effectAllowed = "move";
+      ev.dataTransfer.setData("text/plain", dragging.map((x) => x.name).join("\n"));
+    },
+    ondragend: () => { dragging = []; },
+    ondragover: isFolder ? (ev) => {
+      if (!dragging.length || dragging.some((x) => x.path === e.path)) return;
+      ev.preventDefault();
+      ev.currentTarget.classList.add("drop");
+    } : null,
+    ondragleave: isFolder ? (ev) => ev.currentTarget.classList.remove("drop") : null,
+    ondrop: isFolder ? (ev) => {
+      ev.preventDefault();
+      ev.currentTarget.classList.remove("drop");
+      const these = dragging.filter((x) => x.path !== e.path);
+      dragging = [];
+      if (these.length) moveInBackup(these, e.path);
+    } : null,
+  };
   return el("li", pickRow(cloud, e, {
+    ...drag,
     class: isFolder ? "clickable" : "",
     ondblclick: (ev) => {
       if (ev.target.closest("button, input, a")) return;
@@ -1052,7 +1086,8 @@ function renderSelection() {
     el("button", { class: "small primary", onclick: () => bulkDownload(sel) }, "Download"),
     el("button", { class: "small", onclick: () => restore(sel) }, "Restore"),
     el("button", { class: "small", onclick: () => copyTo(sel) }, "Copy to…"),
-    el("button", { class: "small", onclick: () => moveInBackup(sel) }, "Move in backup…"),
+    el("button", { class: "small", onclick: () => moveInBackup(sel) }, "Move…"),
+    n === 1 ? el("button", { class: "small", onclick: () => renameInBackup(sel[0]) }, "Rename…") : null,
     onPhone ? el("button", { class: "small", onclick: () => shareFiles(sel) }, "Share")
       : el("button", { class: "small", onclick: () => copyLinks(sel) }, "Copy Telegram links"),
     anyHere && anyLocal ? el("button", { class: "small", onclick: () => freeSpace(sel.map((e) => e.path)) }, `Delete from ${here}`) : null,
@@ -1152,24 +1187,118 @@ async function copyTo(entries, why) {
   } catch (err) { showError(err.message, "Couldn't copy"); }
 }
 
-async function moveInBackup(entries) {
-  const folders = [...new Set((await api("/api/cloud?path=")).entries.filter((e) => e.kind === "folder").map((e) => e.path))];
-  const list = el("datalist", { id: "moveTargets" }, folders.map((f) => el("option", { value: f })));
-  const input = el("input", { type: "text", list: "moveTargets", placeholder: "Documents/Archive", autocomplete: "off", value: cloudPath });
+// chooseCloudFolder asks for a folder inside the backup, which can be browsed
+// and added to; null if cancelled. Folders in skip (being moved) aren't offered.
+async function chooseCloudFolder(title, button, start, skip = []) {
+  let current = start || "";
+  const crumbs = el("div", { class: "pick-crumbs" });
+  const list = el("ul", { class: "list folder-pick" });
+  const name = el("input", { type: "text", placeholder: "New folder name", autocomplete: "off" });
+  const make = el("div", { class: "row-head" }, name,
+    el("button", { type: "button", class: "small", onclick: async () => {
+      try {
+        await api("/api/new-folder", { parent: current, name: name.value });
+        name.value = "";
+        await go(current);
+      } catch (err) { toast(err.message); }
+    } }, "Create folder"));
+  async function go(p) {
+    let r;
+    try { r = await api(`/api/cloud?path=${encodeURIComponent(p)}`); } catch (err) { toast(err.message); return; }
+    current = p;
+    const parts = p.split("/").filter(Boolean);
+    replace(crumbs, el("button", { type: "button", onclick: () => go("") }, "All backups"),
+      parts.flatMap((part, i) => [el("span", {}, "/"), el("button", { type: "button", onclick: () => go(parts.slice(0, i + 1).join("/")) }, part)]));
+    const dirs = r.entries.filter((e) => e.kind === "folder" && !skip.includes(e.path));
+    replace(list,
+      p ? el("li", { class: "clickable", onclick: () => go(p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "") },
+        el("span", { class: "icon" }, "⬆️"), el("div", { class: "grow name" }, "Up one folder")) : null,
+      dirs.map((d) => el("li", { class: "clickable", onclick: () => go(d.path) },
+        el("span", { class: "icon" }, "📁"), el("div", { class: "grow name" }, d.name))),
+      dirs.length ? null : el("li", {}, el("div", { class: "grow sub" }, "No folders in here. You can still choose this one.")));
+    make.hidden = !p || otherDevice(p);
+  }
+  await go(current);
+  let picked = null;
   await dialog({
-    title: `Move ${names(entries)} in the backup`,
-    body: el("div", {},
-      el("p", {}, "Changes where they're filed in your Telegram backup. Nothing is downloaded or deleted."),
-      el("label", {}, "Move to this backup folder", input, list),
-      el("p", { class: "hint" }, `Only for things no longer backed up from ${here}; otherwise they'd simply upload again at their old place. Files stay in their device's part of the backup (PC or Phone).`)),
-    buttons: [{ label: "Cancel", value: null }, { label: "Move", value: "go", primary: true }],
+    title,
+    body: el("div", {}, crumbs, list, make),
+    buttons: [{ label: "Cancel", value: null }, { label: button, value: "pick", primary: true }],
     run: async () => {
-      await startBulk("move", entries, { to: input.value });
-      toast("Moving; progress is at the top of the page.");
+      if (!current) throw new Error("Open a folder first; things can't be moved to the very top.");
+      picked = current;
+    },
+  });
+  return picked;
+}
+
+const parentOf = (p) => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "");
+
+// moveInBackup moves files or folders into another folder of the backup, and
+// on this device too; Undo is offered when it's done.
+async function moveInBackup(entries, to) {
+  if (to === undefined) {
+    to = await chooseCloudFolder(`Move ${names(entries)} to…`, "Move here", cloudPath, entries.filter((e) => e.kind === "folder").map((e) => e.path));
+    if (to === null) return;
+  }
+  try {
+    const { task } = await startBulk("move", entries, { to });
+    const parents = [...new Set(entries.map((e) => parentOf(e.path)))];
+    if (!parents.includes("")) {
+      undoers.set(task, async () => {
+        try {
+          for (const parent of parents) {
+            const were = entries.filter((e) => parentOf(e.path) === parent);
+            await api("/api/bulk", { action: "move", paths: were.map((e) => `${to}/${e.name}`), to: parent });
+          }
+          toast("Moving them back…");
+        } catch (err) { showError(err.message, "Couldn't undo"); }
+        refresh();
+      });
+    }
+    toast(`Moving ${names(entries)}; progress is at the top of the page.`);
+    cloud.selected.clear();
+    refresh();
+  } catch (err) { showError(err.message, "Couldn't move"); }
+}
+
+async function renameInBackup(entry) {
+  const input = el("input", { type: "text", autocomplete: "off", value: entry.name });
+  await dialog({
+    title: `Rename ${entry.name}`,
+    body: el("div", {},
+      el("label", {}, "New name", input),
+      el("p", { class: "hint" }, `A file or folder backed up from ${here} is renamed here too, and other devices follow the next time they check Telegram.`)),
+    buttons: [{ label: "Cancel", value: null }, { label: "Rename", value: "go", primary: true }],
+    run: async () => {
+      const name = input.value.trim();
+      if (!name || name === entry.name) throw new Error("Type a different name.");
+      const { task } = await startBulk("rename", [entry], { name });
+      const parent = parentOf(entry.path);
+      undoers.set(task, async () => {
+        try { await api("/api/bulk", { action: "rename", paths: [parent ? `${parent}/${name}` : name], name: entry.name }); toast("Renaming it back…"); }
+        catch (err) { showError(err.message, "Couldn't undo"); }
+        refresh();
+      });
+      toast("Renaming; progress is at the top of the page.");
       cloud.selected.clear();
       refresh();
     },
   });
+}
+
+// newFolderHere makes an empty folder in the folder being browsed.
+async function newFolderHere() {
+  const input = el("input", { type: "text", autocomplete: "off", placeholder: "Folder name" });
+  await dialog({
+    title: "New folder",
+    body: el("div", {},
+      el("p", {}, `It's made inside ${cloudPath} (on ${here} too), ready for you to move files into.`),
+      el("label", {}, "Folder name", input)),
+    buttons: [{ label: "Cancel", value: null }, { label: "Create", value: "go", primary: true }],
+    run: async () => { await api("/api/new-folder", { parent: cloudPath, name: input.value }); },
+  });
+  loadCloud();
 }
 
 async function shareFiles(entries) {
@@ -1926,6 +2055,7 @@ document.addEventListener("DOMContentLoaded", () => {
     loadCloud();
   });
   $("cloudRefresh").addEventListener("click", () => refreshCloud(true));
+  $("cloudNewFolder").addEventListener("click", () => newFolderHere().catch((err) => toast(err.message)));
   let grid = false;
   try { grid = localStorage.getItem("tgvault.grid") === "1"; } catch {}
   setGrid(grid);

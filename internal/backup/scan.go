@@ -50,6 +50,8 @@ func markerSet(markers []string) map[string]bool {
 
 // scanRoot compares a backup folder with the database and queues changes.
 func (e *Engine) scanRoot(root store.Root) {
+	e.orgMu.RLock()
+	defer e.orgMu.RUnlock()
 	info, err := os.Stat(root.Path)
 	if err != nil || !info.IsDir() {
 		// The folder may be on a drive that is unplugged; never treat that as deletions.

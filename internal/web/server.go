@@ -164,6 +164,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/search", s.search)
 	s.mux.HandleFunc("POST /api/sync", s.syncNow)
 	s.mux.HandleFunc("POST /api/bulk", s.bulk)
+	s.mux.HandleFunc("POST /api/new-folder", s.newFolder)
 	s.mux.HandleFunc("POST /api/bulk-zip", s.bulkZip)
 	s.mux.HandleFunc("GET /api/recommendations", s.recommendations)
 	s.mux.HandleFunc("POST /api/login/resend", s.loginResend)

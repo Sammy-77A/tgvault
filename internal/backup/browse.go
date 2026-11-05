@@ -147,70 +147,7 @@ func (e *Engine) Search(q Query) ([]Entry, int, error) {
 	return out, total, nil
 }
 
-// ---- moving inside the backup ----
-
-// MoveInCloud moves files or folders to another folder of the backup by
-// rewriting their captions in Telegram. Like removing, it's only for things
-// no longer backed up from this device, or they would upload again.
-func (e *Engine) MoveInCloud(ctx context.Context, prefixes []string, toFolder string) (int64, error) {
-	toFolder = strings.Trim(path.Clean("/"+toFolder), "/")
-	if toFolder == "" {
-		return 0, errors.New("choose a folder inside the backup to move to")
-	}
-	if err := e.checkNotBackedUpHere(prefixes); err != nil {
-		return 0, err
-	}
-	type move struct {
-		v  store.Version
-		to string
-	}
-	var moves []move
-	moving := map[int]bool{}
-	for _, prefix := range prefixes {
-		if meta.DeviceOf(prefix) != meta.DeviceOf(toFolder) {
-			return 0, errors.New("files can't move between the PC's and the phone's parts of the backup")
-		}
-		if underPrefix(toFolder, prefix) {
-			return 0, fmt.Errorf("can't move %s into itself", prefix)
-		}
-		vs, err := e.st.VersionsUnder(prefix)
-		if err != nil {
-			return 0, err
-		}
-		parent := path.Dir(prefix)
-		for _, v := range vs {
-			rel := v.CloudPath
-			if parent != "." {
-				rel = strings.TrimPrefix(v.CloudPath, parent+"/")
-			}
-			moves = append(moves, move{v, toFolder + "/" + rel})
-			moving[v.MsgID] = true
-		}
-	}
-	if len(moves) == 0 {
-		return 0, errors.New("nothing stored there")
-	}
-	t := e.newTask("move", "Moving "+describe(prefixes)+" to "+toFolder)
-	t.update(func(t *Task) { t.Total = len(moves) })
-	go func() {
-		ctx := context.WithoutCancel(ctx)
-		for _, m := range moves {
-			t.update(func(t *Task) { t.Current = m.v.CloudPath })
-			err := e.moveVersion(ctx, m.v, m.to, moving)
-			t.update(func(t *Task) {
-				t.Done++
-				if err != nil {
-					t.Errors = append(t.Errors, m.v.CloudPath+": "+tgclient.Friendly(err))
-				}
-			})
-		}
-		for _, prefix := range prefixes {
-			_ = e.st.ForgetGoneUnder(prefix)
-		}
-		t.update(func(t *Task) { t.Finished, t.Current = true, "" })
-	}()
-	return t.ID, nil
-}
+// ---- moving inside the backup ---- (MoveInCloud and friends are in organize.go)
 
 // moveVersion moves one version. moving holds every version being moved with
 // it (such as a file's older versions), which don't count as being in the way.

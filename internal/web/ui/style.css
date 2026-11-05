@@ -351,3 +351,7 @@ body.viewing > .jump.page { display: none; }
 /* The library app (a friend's copy) shows the file list and nothing else. */
 .library .tabs, .library [data-panel="overview"], .library [data-panel="space"],
 .library [data-panel="activity"], .library [data-panel="settings"] { display: none; }
+
+/* Organizing: a folder row that dragged files can be dropped on */
+.list li.drop { outline: 2px dashed var(--accent, currentColor); outline-offset: -2px; background: var(--accent-soft); }
+.toast button { margin-left: .5rem; }

@@ -118,16 +118,10 @@ func TestRecommendationsOnlyUpToDateFiles(t *testing.T) {
 	}
 }
 
-func TestMoveRefusesFilesStillBackedUpHere(t *testing.T) {
+// Files still backed up from here move with their real file now (see
+// organize_test.go); what stays refused is crossing between devices.
+func TestMoveRefusesAcrossDevices(t *testing.T) {
 	e, st := newTestEngine(t)
-	dir := t.TempDir()
-	write(t, filepath.Join(dir, "a.txt"), "a")
-	root, _ := st.AddRoot(dir, "R")
-	e.scanRoot(root)
-	addVersion(t, st, 1, "R/a.txt", 1, 1)
-	if _, err := e.MoveInCloud(context.Background(), []string{"R/a.txt"}, "Archive"); err == nil {
-		t.Fatal("moving a file that's still backed up from here must be refused")
-	}
 	addVersion(t, st, 2, "Phone/Camera/x.jpg", 1, 1)
 	if _, err := e.MoveInCloud(context.Background(), []string{"Phone/Camera/x.jpg"}, "Archive"); err == nil ||
 		!strings.Contains(err.Error(), "between") {

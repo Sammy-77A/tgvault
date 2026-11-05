@@ -79,6 +79,7 @@ func (s *Server) bulk(w http.ResponseWriter, r *http.Request) {
 		Paths  []string `json:"paths"`
 		Dest   string   `json:"dest"` // restore/copy: folder on this device; "" = original place
 		To     string   `json:"to"`   // move: folder inside the backup
+		Name   string   `json:"name"` // rename: the new name
 	}
 	if err := readJSON(r, &body); err != nil {
 		fail(w, 400, "bad request")
@@ -170,6 +171,12 @@ func (s *Server) bulk(w http.ResponseWriter, r *http.Request) {
 		id, err = s.eng.DeleteFromCloudMany(ctx, paths)
 	case "move":
 		id, err = s.eng.MoveInCloud(ctx, paths, body.To)
+	case "rename":
+		if len(paths) != 1 {
+			fail(w, 400, "rename one item at a time")
+			return
+		}
+		id, err = s.eng.RenameInCloud(ctx, paths[0], body.Name)
 	case "links":
 		links, err := s.eng.Links(paths)
 		if err != nil {
@@ -187,6 +194,29 @@ func (s *Server) bulk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"task": id})
+}
+
+// newFolder makes an empty folder inside the folder being browsed.
+func (s *Server) newFolder(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Parent string `json:"parent"`
+		Name   string `json:"name"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		fail(w, 400, "bad request")
+		return
+	}
+	parent, ok := cleanCloudPath(body.Parent)
+	if !ok {
+		fail(w, 400, "bad path")
+		return
+	}
+	p, err := s.eng.NewFolder(parent, body.Name)
+	if err != nil {
+		fail(w, 400, err.Error())
+		return
+	}
+	writeJSON(w, map[string]any{"path": p})
 }
 
 // destFolder checks a folder chosen to restore into, creating it if needed.

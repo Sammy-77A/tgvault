@@ -78,6 +78,9 @@ func TestLibraryOnlyServesItsFolder(t *testing.T) {
 		// Everything that changes or reveals more than the folder.
 		{"POST", "/api/bulk", `{"action":"delete-cloud","paths":["Movies/c.mp4"]}`, 403},
 		{"POST", "/api/bulk", `{"action":"move","paths":["Movies/c.mp4"],"to":"Other"}`, 403},
+		{"POST", "/api/bulk", `{"action":"move","paths":["Movies/c.mp4"],"to":"Movies/Action"}`, 403},
+		{"POST", "/api/bulk", `{"action":"rename","paths":["Movies/c.mp4"],"name":"d.mp4"}`, 403},
+		{"POST", "/api/new-folder", `{"parent":"Movies","name":"New"}`, 403},
 		{"POST", "/api/bulk", `{"action":"restore","paths":["Movies/c.mp4"],"dest":"/tmp"}`, 403},
 		{"POST", "/api/bulk", `not json`, 403},
 		{"POST", "/api/delete-cloud", `{"path":"Movies/c.mp4"}`, 403},

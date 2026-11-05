@@ -68,6 +68,9 @@ type Engine struct {
 	beatSeen   bool // the heartbeat has run since this process started
 
 	moveMu sync.Mutex // one file at a time may take over a stored copy; see adoptMoved
+	// Scans hold it for reading; moving a file on disk and in the backup holds it
+	// for writing, so a scan never sees the file half-moved.
+	orgMu sync.RWMutex
 }
 
 // Progress of an item being uploaded.
