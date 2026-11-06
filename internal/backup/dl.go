@@ -238,6 +238,16 @@ func (e *Engine) DownloadControl(action, p string) error {
 			return errors.New("say which download")
 		}
 		e.dlStop(p, "cancel")
+		// let the attempt let go of the file before it is removed
+		for i := 0; i < 300; i++ {
+			e.dl.mu.Lock()
+			busy := e.dl.live[p] != nil
+			e.dl.mu.Unlock()
+			if !busy {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
 		_ = os.Remove(e.MediaLocal(p) + ".part")
 		_ = e.st.DLDelete(p)
 	case "clear":

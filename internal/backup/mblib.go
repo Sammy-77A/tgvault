@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/Sammy-77A/tgvault/internal/media"
+	"github.com/Sammy-77A/tgvault/internal/meta"
 	"github.com/Sammy-77A/tgvault/internal/store"
 )
 
@@ -307,6 +309,10 @@ func (e *Engine) RefreshLibrary(ctx context.Context) {
 	if !e.Connected() {
 		return
 	}
+	// Files the owner's PC added since this phone last looked.
+	if _, err := e.SyncNew(ctx); err != nil && ctx.Err() == nil {
+		log.Printf("library: looking for new files: %v", err)
+	}
 	vs, err := e.st.VersionsUnder(e.MediaRoot())
 	if err != nil || len(vs) == 0 {
 		return
@@ -322,12 +328,45 @@ func (e *Engine) RefreshLibrary(ctx context.Context) {
 		return
 	}
 	var gone []int
+	have := map[int]string{}
+	for _, v := range vs {
+		have[v.MsgID] = v.CloudPath
+	}
 	for _, id := range ids {
-		if _, ok := remote[id]; !ok {
+		rf, ok := remote[id]
+		if !ok {
 			gone = append(gone, id)
+			continue
+		}
+		// The owner's PC files loose videos into Movies/ and Shows/ after
+		// they've arrived, which changes the path in the message's caption.
+		if in, ok := meta.Parse(rf.Caption); ok && !in.Split() && !in.Change() && in.Path != "" && in.Path != have[id] {
+			e.followLibraryMove(id, have[id], in.Path)
 		}
 	}
 	if len(gone) > 0 {
 		_ = e.st.DeleteVersions(gone)
+	}
+}
+
+// followLibraryMove records that the owner moved a library file, and moves the
+// copy already on this phone along with it.
+func (e *Engine) followLibraryMove(id int, from, to string) {
+	if err := e.st.MoveVersion(id, to); err != nil {
+		return
+	}
+	log.Printf("library: %s is now %s", from, to)
+	if d, ok := e.st.DLGet(from); ok {
+		_ = e.st.DLDelete(from)
+		d.Path = to
+		_ = e.st.DLUpsert(d)
+	}
+	for _, suffix := range []string{"", ".part"} {
+		src, dst := e.MediaLocal(from)+suffix, e.MediaLocal(to)+suffix
+		if _, err := os.Stat(src); err == nil {
+			if _, err := os.Stat(dst); err != nil {
+				_ = moveOnDisk(src, dst, false)
+			}
+		}
 	}
 }

@@ -226,3 +226,4 @@ body.mb-on .jump { display: none !important; }
 .mb-bars i { width: 3px; background: currentColor; opacity: .3; border-radius: 1px; }
 .mb-bars i:nth-child(1) { height: 30%; } .mb-bars i:nth-child(2) { height: 55%; } .mb-bars i:nth-child(3) { height: 78%; } .mb-bars i:nth-child(4) { height: 100%; }
 .mb-bars i.on { opacity: 1; }
+.mb-rq-all { padding: .4rem 0 .6rem; font-weight: 600; }

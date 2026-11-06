@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Sammy-77A/tgvault/internal/media"
+	"github.com/Sammy-77A/tgvault/internal/meta"
 	"github.com/Sammy-77A/tgvault/internal/store"
 	"github.com/Sammy-77A/tgvault/internal/tmdb"
 )
@@ -624,5 +625,47 @@ func TestAMissingSeasonAtTMDBIsAQuestionNotAnEndlessRetry(t *testing.T) {
 	waitTasks(t, e)
 	if len(*told) != 1 {
 		t.Errorf("and not again on the next pass: %v", *told)
+	}
+}
+
+func TestLibraryFollowsAFileTheOwnerFiledAfterItArrived(t *testing.T) {
+	e, st, tg, root, dir := moveRig(t)
+	st.Set(SettingMediaRoot, "R/tgmoviebox")
+	write(t, filepath.Join(dir, "tgmoviebox", "Dexter - Resurrection - S02E02.mkv"), "ep2")
+	write(t, filepath.Join(dir, "tgmoviebox", "Shows", "Dexter - Resurrection", "Season 02", "Dexter - Resurrection - S02E01.mkv"), "ep1")
+	syncAll(t, e, st, root)
+	var id int
+	vs, _ := st.VersionsUnder("R/tgmoviebox")
+	for _, v := range vs {
+		if strings.HasSuffix(v.CloudPath, "S02E02.mkv") {
+			id = v.MsgID
+		}
+	}
+	if id == 0 {
+		t.Fatal("setup")
+	}
+	// the PC sorts it into the show's folder: only the caption changes
+	tg.mu.Lock()
+	in, ok := meta.Parse(tg.msgs[id].caption)
+	tg.mu.Unlock()
+	if !ok {
+		t.Fatal("caption")
+	}
+	in.Path = "R/tgmoviebox/Shows/Dexter - Resurrection/Season 02/Dexter - Resurrection - S02E02.mkv"
+	cap, err := meta.Caption(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tg.EditCaption(context.Background(), id, cap)
+	e.RefreshLibrary(context.Background())
+	lib, _ := e.Library()
+	eps := 0
+	for _, tl := range lib {
+		for _, sn := range tl.Seasons {
+			eps += len(sn.Episodes)
+		}
+	}
+	if eps != 2 {
+		t.Errorf("both episodes should be listed under the show: %+v", lib)
 	}
 }

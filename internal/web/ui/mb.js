@@ -462,6 +462,15 @@ function episodeRow(d, e, playable) {
 // ---------- requests ----------
 
 async function requestDialog(d) {
+  try {
+    await requestDialogInner(d);
+  } catch (e) {
+    // never fail silently: the person tapped a button and expects something
+    toast("Couldn't open the request window: " + (e && e.message ? e.message : e));
+  }
+}
+
+async function requestDialogInner(d) {
   const it = d.item;
   if (it.kind === "movie") {
     const ok = await dialog({
@@ -473,9 +482,8 @@ async function requestDialog(d) {
     if (ok) { toast(requestedToast()); mbRender(true); }
     return;
   }
-  const have = new Map((d.seasons || []).map((s) => [s.number, s]));
-  const picks = new Map(); // season -> true (whole) | Set of episodes
-  const rows = (d.seasons || []).map((s) => {
+  const seasonList = d.seasons || [];
+  const rows = seasonList.map((s) => {
     const complete = s.episodes > 0 && s.have >= s.episodes;
     const box = el("input", { type: "checkbox", id: `rq${s.number}`, disabled: complete });
     const epBox = el("div", { class: "mb-rq-eps", hidden: true });
@@ -492,17 +500,25 @@ async function requestDialog(d) {
           }));
         } catch (er) { epBox.textContent = er.message; epBox.dataset.loaded = ""; }
       }
-    } }, "Pick episodes");
+    } }, "Pick episodes ▾");
     return el("div", { class: "mb-rq" },
       el("label", { class: "mb-rq-season" }, box, ` ${s.name || "Season " + s.number}`, el("span", { class: "mb-card-sub" }, ` ${s.episodes} episodes`, s.have ? `, ${s.have} already here` : "")), complete ? null : more, epBox);
   });
+  const all = el("input", { type: "checkbox", id: "rqAll" });
+  all.addEventListener("change", () => {
+    for (const s of seasonList) {
+      const b = document.getElementById(`rq${s.number}`);
+      if (b && !b.disabled) b.checked = all.checked;
+    }
+  });
+  const allRow = seasonList.length > 1 ? el("label", { class: "mb-rq-season mb-rq-all" }, all, " Select all seasons") : null;
   const ok = await dialog({
     title: `Request ${it.title}`,
-    body: el("div", { class: "mb-rq-list" }, el("p", { class: "mb-hint" }, "Choose whole seasons, or pick single episodes."), rows),
+    body: el("div", { class: "mb-rq-list" }, el("p", { class: "mb-hint" }, seasonList.length ? "Choose whole seasons, or pick single episodes." : "No season list is available right now. Check your connection and try again."), allRow, rows),
     buttons: [{ label: "Cancel", value: null }, { label: "Request", value: "go", primary: true }],
     run: async () => {
       const seasons = [], episodes = {};
-      for (const s of d.seasons) {
+      for (const s of seasonList) {
         const box = document.getElementById(`rq${s.number}`);
         if (box && box.checked) { seasons.push(s.number); continue; }
         const picked = [...document.querySelectorAll(`#dlgBody .mb-rq`)].find((x) => x.querySelector(`#rq${s.number}`));
@@ -648,7 +664,7 @@ screens.library = async ({ q = "", kind = "all" }) => {
   const lib = await api("/api/mb/library");
   const titles = lib.titles;
   // posters still being looked up: ask again shortly, a few times
-  if (lib.pending && (MB.libTries = (MB.libTries || 0) + 1) <= 4) setTimeout(() => { if (MB.tab === "library") mbRefreshCurrent(); }, 2500);
+  if (lib.pending && (MB.libTries = (MB.libTries || 0) + 1) <= 10) setTimeout(() => { if (MB.tab === "library") mbRefreshCurrent(); }, 2500);
   if (!lib.pending) MB.libTries = 0;
   const out = el("div", { class: "mb-libgrid" });
   const status = el("p", { class: "mb-hint" });

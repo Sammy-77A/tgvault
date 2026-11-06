@@ -35,6 +35,7 @@ type mbState struct {
 	lastRefresh time.Time
 	meta        map[string]libMeta
 	resolving   bool
+	refreshing  bool // asking Telegram what changed in the library
 }
 
 func (s *Server) mbTMDB() (*tmdb.Client, error) {
@@ -689,9 +690,13 @@ func (s *Server) mbLibrary(w http.ResponseWriter, r *http.Request) {
 		s.mb.lastRefresh = time.Now()
 	}
 	s.mb.mu.Unlock()
-	if stale && s.eng.Connected() { // files the owner deleted drop out of the list
+	if stale && s.eng.Connected() { // new, moved and deleted files change the list
+		s.mb.mu.Lock()
+		s.mb.refreshing = true
+		s.mb.mu.Unlock()
 		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer func() { s.mb.mu.Lock(); s.mb.refreshing = false; s.mb.mu.Unlock() }()
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			s.eng.RefreshLibrary(ctx)
 		}()
@@ -768,6 +773,9 @@ func (s *Server) mbLibrary(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	s.mb.mu.Lock()
+	pending = pending || s.mb.refreshing
+	s.mb.mu.Unlock()
 	writeJSON(w, map[string]any{"titles": out, "root": s.eng.MediaRoot(), "pending": pending})
 }
 
