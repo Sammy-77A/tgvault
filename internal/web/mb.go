@@ -30,8 +30,9 @@ import (
 // a title comes through here so the TMDB key stays in the Go side.
 
 type mbState struct {
-	mu       sync.Mutex
-	lastSync time.Time
+	mu          sync.Mutex
+	lastSync    time.Time
+	lastRefresh time.Time
 }
 
 func (s *Server) mbTMDB() (*tmdb.Client, error) {
@@ -644,6 +645,17 @@ func (s *Server) resolve(ctx context.Context, c *tmdb.Client, t backup.LibTitle)
 }
 
 func (s *Server) mbLibrary(w http.ResponseWriter, r *http.Request) {
+	s.mb.mu.Lock()
+	stale := time.Since(s.mb.lastRefresh) > 20*time.Second
+	if stale {
+		s.mb.lastRefresh = time.Now()
+	}
+	s.mb.mu.Unlock()
+	if stale { // files the owner deleted drop out of the list
+		ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+		s.eng.RefreshLibrary(ctx)
+		cancel()
+	}
 	lib, err := s.eng.Library()
 	if err != nil {
 		fail(w, 500, err.Error())

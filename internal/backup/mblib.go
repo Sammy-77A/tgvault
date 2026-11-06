@@ -352,3 +352,31 @@ func (e *Engine) MediaDiskUsage() int64 {
 	})
 	return n
 }
+
+// RefreshLibrary forgets library files that were deleted from Telegram (by the
+// owner, on the PC), so the phone doesn't offer them. It asks Telegram about
+// just the library's files, which is cheap, and does nothing when it can't
+// get an answer.
+func (e *Engine) RefreshLibrary(ctx context.Context) {
+	vs, err := e.st.VersionsUnder(e.MediaRoot())
+	if err != nil || len(vs) == 0 {
+		return
+	}
+	ids := make([]int, 0, len(vs))
+	for _, v := range vs {
+		ids = append(ids, v.MsgID)
+	}
+	remote, err := e.tg.Exists(ctx, ids)
+	if err != nil {
+		return
+	}
+	var gone []int
+	for _, id := range ids {
+		if _, ok := remote[id]; !ok {
+			gone = append(gone, id)
+		}
+	}
+	if len(gone) > 0 {
+		_ = e.st.DeleteVersions(gone)
+	}
+}

@@ -543,7 +543,7 @@ screens.downloads = async () => {
     const mark = t.local === t.total ? pill("On phone", "ok") : t.local ? pill(`${t.local}/${t.total} on phone`, "ok") : pill("Download", "info");
     return el("button", { type: "button", class: "mb-card", onclick: () => mbGo("details", { kind: t.kind, id: t.tmdb || 0, lib: t }) },
       el("div", { class: "mb-poster" }, mbImg(t.poster, "w342", t.title), mark),
-      el("div", { class: "mb-card-title" }, t.title), el("div", { class: "mb-card-sub" }, t.year || "", t.kind === "show" ? `${t.seasons.length} season${t.seasons.length === 1 ? "" : "s"}` : ` · ${bytes(t.size)}`));
+      el("div", { class: "mb-card-title" }, t.title), el("div", { class: "mb-card-sub" }, [t.year || "", t.kind === "show" ? `${t.seasons.length} season${t.seasons.length === 1 ? "" : "s"}` : bytes(t.size)].filter(Boolean).join(" · ")));
   };
   const empty = !titles.length ? el("div", { class: "mb-empty" }, icon("film"), el("p", {}, "Nothing here yet."), el("p", { class: "mb-hint" }, "Request a movie or show from Home. When the owner adds it, it appears here to download and watch offline.")) : null;
   return el("div", { class: "mb-downloads" }, chips, cont, reqs,

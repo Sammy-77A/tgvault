@@ -360,3 +360,43 @@ func mustRoot(t *testing.T, e *Engine) store.Root {
 	}
 	return roots[0]
 }
+
+func TestLibraryDropsFilesDeletedFromTelegram(t *testing.T) {
+	e, st, tg, root, dir := moveRig(t)
+	st.Set(SettingMediaRoot, "R/tgmoviebox")
+	write(t, filepath.Join(dir, "tgmoviebox", "Movies", "Up (2009)", "Up (2009).mkv"), "up")
+	write(t, filepath.Join(dir, "tgmoviebox", "Movies", "Heat (1995)", "Heat (1995).mkv"), "heat")
+	syncAll(t, e, st, root)
+	lib, _ := e.Library()
+	if len(lib) != 2 {
+		t.Fatalf("setup: %+v", lib)
+	}
+	// the owner deletes Heat in Telegram; this device hasn't noticed
+	var heat int
+	for _, tl := range lib {
+		if tl.Title == "Heat" {
+			heat = tl.Files[0].MsgID
+		}
+	}
+	tg.DeleteMessages(context.Background(), []int{heat})
+	if lib, _ = e.Library(); len(lib) != 2 {
+		t.Fatal("nothing knows yet")
+	}
+	e.RefreshLibrary(context.Background())
+	lib, _ = e.Library()
+	if len(lib) != 1 || lib[0].Title != "Up" {
+		t.Errorf("Heat should be gone from the list, Up stays: %+v", lib)
+	}
+	// an unreachable Telegram must not empty the list
+	tg.blockReads = 0
+	e.RefreshLibrary(canceled())
+	if lib, _ = e.Library(); len(lib) != 1 {
+		t.Errorf("no answer means no change: %+v", lib)
+	}
+}
+
+func canceled() context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return ctx
+}
