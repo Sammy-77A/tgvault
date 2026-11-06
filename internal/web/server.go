@@ -226,6 +226,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/mb/img", s.mbImg)
 	s.mux.HandleFunc("POST /api/mb/request", s.mbRequest)
 	s.mux.HandleFunc("GET /api/mb/requests", s.mbRequests)
+	s.mux.HandleFunc("POST /api/mb/requests/clear", s.mbRequestsClear)
+	s.mux.HandleFunc("POST /api/media/clear", s.mbRequestsClear)
 	s.mux.HandleFunc("GET /api/mb/library", s.mbLibrary)
 	s.mux.HandleFunc("POST /api/mb/download", s.mbDownload)
 	s.mux.HandleFunc("POST /api/mb/remove", s.mbRemove)

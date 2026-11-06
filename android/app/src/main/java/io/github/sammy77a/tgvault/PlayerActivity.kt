@@ -258,6 +258,12 @@ class PlayerActivity : Activity() {
                     "This can't be played here (${error.errorCodeName}).",
                     Toast.LENGTH_LONG,
                 ).show()
+                // In a playlist, carry on with the next one rather than stopping.
+                if (p.hasNextMediaItem()) {
+                    p.seekToNextMediaItem()
+                    p.prepare()
+                    p.play()
+                }
             }
 
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
@@ -270,10 +276,12 @@ class PlayerActivity : Activity() {
             p.setMediaItem(MediaItem.fromUri(single))
             p.seekTo(position)
         } else {
-            p.setMediaItems(items.indices.map { mediaItemOf(it) })
+            // Decide where to start before loading: loading the list reports "item 0" to the listener.
             val at = index.coerceIn(0, items.size - 1)
             val resumeAt = if (position > 0) position else items[at].pos
+            p.setMediaItems(items.indices.map { mediaItemOf(it) })
             p.seekTo(at, resumeAt)
+            index = at
             title.text = items[at].name
         }
         // Subtitles: the one chosen language, shown from the start when there is one.

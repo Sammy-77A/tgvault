@@ -62,6 +62,7 @@ function mbBuild() {
     return prev ? prev() : false;
   };
   window.tgvaultRefresh = () => { mbRefreshCurrent(); };
+  window.addEventListener("scroll", () => document.querySelector(".mb-top").classList.toggle("solid", window.scrollY > 120), { passive: true });
 }
 
 // mbShow is called by app.js whenever the state arrives in the library app.
@@ -159,7 +160,16 @@ screens.home = async () => {
     return el("div", { class: "mb-error" }, el("p", {}, "Getting set up… the app picks up its keys from the owner's PC (tgvault must be running there with the TMDB key entered)."),
       el("button", { type: "button", onclick: () => mbRender() }, "Check again"));
   }
-  const h = await api("/api/mb/home");
+  let h;
+  try {
+    h = await api("/api/mb/home");
+  } catch (e) {
+    // Offline: what's been downloaded still plays.
+    return el("div", { class: "mb-error" }, el("p", {}, "Can't reach the movie database right now."),
+      el("p", { class: "mb-hint" }, e.message),
+      el("button", { type: "button", class: "mb-primary", onclick: () => mbTab("downloads") }, "Open my downloads"),
+      el("button", { type: "button", onclick: () => mbRender() }, "Try again"));
+  }
   const hero = (h.rows[0] ? h.rows[0].items : []).find((i) => i.backdrop);
   const chips = el("div", { class: "mb-chips" },
     el("button", { type: "button", class: "mb-chip active" }, "All"),
@@ -342,16 +352,21 @@ function seasonsSection(d) {
       el("div", {}, el("strong", {}, s.name || `Season ${s.number}`),
         el("div", { class: "mb-card-sub" }, `${s.episodes} episodes`, s.have ? ` · ${s.have} in library` : "", s.local ? ` · ${s.local} on this phone` : "")),
       s.local ? pill(`${s.local} on phone`, "ok") : s.have ? pill("Available", "info") : null);
-    head.addEventListener("click", async () => {
+    const key = `${it.kind}:${it.title}:${s.number}`;
+    const toggle = async () => {
       body.hidden = !body.hidden;
       head.setAttribute("aria-expanded", String(!body.hidden));
+      MB.open = MB.open || new Set();
+      if (body.hidden) MB.open.delete(key); else MB.open.add(key);
       if (!body.hidden && !body.dataset.loaded) {
         body.dataset.loaded = "1";
         body.replaceChildren(el("div", { class: "mb-loading" }, "Loading…"));
         try { await fillSeason(body, d, s); } catch (e) { body.replaceChildren(el("p", { class: "mb-hint" }, e.message)); body.dataset.loaded = ""; }
       }
-    });
+    };
+    head.addEventListener("click", toggle);
     wrap.append(el("div", { class: "mb-season" }, head, body));
+    if (MB.open && MB.open.has(key)) toggle().then(() => { if (body.hidden) MB.open.add(key); });
   }
   return wrap;
 }
@@ -363,7 +378,7 @@ async function fillSeason(body, d, s) {
     const ls = d.library.seasons.find((x) => x.number === s.number);
     eps = ls.episodes.map((f) => ({ number: f.episodes[0], name: "", file: f }));
   } else {
-    eps = (await api(`/api/mb/season?id=${it.id}&n=${s.number}&title=${encodeURIComponent(it.title)}`)).episodes;
+    eps = (await api(`/api/mb/season?id=${it.id}&n=${s.number}&title=${encodeURIComponent(it.title)}&year=${it.year || 0}`)).episodes;
   }
   const all = eps.filter((e) => e.file);
   const toGet = all.filter((e) => !e.file.local);
@@ -417,7 +432,7 @@ async function requestDialog(d) {
       if (!epBox.hidden && !epBox.dataset.loaded) {
         epBox.dataset.loaded = "1";
         try {
-          const r = await api(`/api/mb/season?id=${it.id}&n=${s.number}&title=${encodeURIComponent(it.title)}`);
+          const r = await api(`/api/mb/season?id=${it.id}&n=${s.number}&title=${encodeURIComponent(it.title)}&year=${it.year || 0}`);
           epBox.replaceChildren(...r.episodes.map((e) => {
             const c = el("input", { type: "checkbox", disabled: !!e.file, "data-ep": e.number });
             c.addEventListener("change", () => { box.checked = false; });
@@ -508,12 +523,15 @@ screens.downloads = async () => {
 
   // requests
   const mine = rq.requests.filter((r) => r.title).slice(0, 12);
-  const reqs = mine.length ? el("section", { class: "mb-reqs" }, el("div", { class: "mb-row-head" }, el("h2", {}, "Requests")),
+  const answered = rq.requests.some((r) => r.state !== "requested");
+  const reqs = mine.length ? el("section", { class: "mb-reqs" }, el("div", { class: "mb-row-head" }, el("h2", {}, "Requests"),
+    answered ? el("button", { type: "button", class: "mb-link mb-clear", onclick: () => api("/api/mb/requests/clear", {}).then(() => mbRender(true)).catch((e) => toast(e.message)) }, "Clear answered") : null),
     mine.map((r) => {
-      const ready = r.state === "fulfilled" || r.available;
-      const status = r.state === "declined" ? pill("Not available", "bad") : ready ? pill("Ready to download", "ok") : pill("Requested", "wait");
+      const status = r.state === "declined" ? pill("Not available", "bad")
+        : r.available ? pill("Ready to download", "ok")
+        : r.state === "fulfilled" ? pill("Being added…", "info") : pill("Requested", "wait");
       const what = r.kind === "movie" ? "Movie" : !r.seasons || !r.seasons.length ? (r.episodes ? "Chosen episodes" : "All seasons") : r.seasons.length === 1 ? `Season ${r.seasons[0]}` : `Seasons ${r.seasons.join(", ")}`;
-      const lt = titles.find((t) => t.kind === (r.kind === "movie" ? "movie" : "show") && t.norm === norm(r.title));
+      const lt = titles.find((t) => t.kind === (r.kind === "movie" ? "movie" : "show") && t.norm === norm(r.title) && (!t.year || !r.year || Math.abs(t.year - r.year) <= 1));
       return el("button", { type: "button", class: "mb-req", onclick: () => mbGo("details", { kind: r.kind === "movie" ? "movie" : "show", id: r.tmdb, lib: lt || undefined }) },
         el("div", { class: "mb-req-poster" }, mbImg(r.poster, "w154", r.title)),
         el("div", { class: "mb-req-main" }, el("strong", {}, r.title, r.year ? ` (${r.year})` : ""), el("div", { class: "mb-card-sub" }, what, " · asked ", when(r.at)), status));

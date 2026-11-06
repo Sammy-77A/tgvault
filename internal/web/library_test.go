@@ -82,6 +82,7 @@ func TestLibraryOnlyServesItsFolder(t *testing.T) {
 		{"POST", "/api/bulk", `{"action":"rename","paths":["Movies/c.mp4"],"name":"d.mp4"}`, 403},
 		{"POST", "/api/new-folder", `{"parent":"Movies","name":"New"}`, 403},
 		{"GET", "/api/media", "", 403},
+		{"POST", "/api/media/clear", "{}", 403},
 		{"POST", "/api/media/key", `{"key":"x"}`, 403},
 		{"POST", "/api/media/organize", `{}`, 403},
 		{"POST", "/api/media/resolve", `{}`, 403},

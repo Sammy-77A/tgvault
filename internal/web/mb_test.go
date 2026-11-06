@@ -484,3 +484,28 @@ func TestLibraryListGetsTitlesPostersAndIDs(t *testing.T) {
 		t.Errorf("the library lists offline too")
 	}
 }
+
+func TestTwoShowsWithOneNameAreToldApartByYear(t *testing.T) {
+	s, _, _ := mbRig(t)
+	root := "Downloads/Telegram Desktop/tgmoviebox"
+	// the library holds the 2011 one, filed with its year because another Shameless exists
+	for id, p := range map[int]string{
+		20: root + "/Shows/Shameless (2011)/Season 01/Shameless - S01E01.mkv",
+	} {
+		s.st.AddVersion(store.Version{MsgID: id, CloudPath: p, Kind: store.KindFile, Size: 8, Hash: "h", UploadedAt: int64(id)})
+	}
+	m := s.marks()
+	if !m.has("show", "Shameless", 2011) {
+		t.Error("the 2011 show is in the library")
+	}
+	only2011 := mbMarks{lib: map[string][]int{"show|shameless": {2011}}}
+	if only2011.has("show", "Shameless", 2004) {
+		t.Error("the 2004 show must not be marked as in the library")
+	}
+	if !only2011.has("show", "Shameless", 2011) || !only2011.has("show", "Shameless", 2012) {
+		t.Error("the year may be a little off between TMDB and the folder")
+	}
+	if !(mbMarks{lib: map[string][]int{"show|good omens": {0}}}).has("show", "Good Omens", 2019) {
+		t.Error("a folder without a year matches any")
+	}
+}

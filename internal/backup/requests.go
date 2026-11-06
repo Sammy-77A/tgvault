@@ -86,6 +86,17 @@ func (e *Engine) mailbox() (mailbox, error) {
 	return m, nil
 }
 
+// online waits a little for the Telegram connection (a phone that was idle
+// reconnects on demand).
+func (e *Engine) online(ctx context.Context) error {
+	wctx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	defer cancel()
+	if err := e.tg.WaitReady(wctx); err != nil {
+		return errors.New("not connected to Telegram yet; try again in a moment")
+	}
+	return nil
+}
+
 func newReqID() string {
 	var b [6]byte
 	_, _ = rand.Read(b[:])
@@ -99,6 +110,9 @@ func (e *Engine) MakeRequest(ctx context.Context, r Request) (Request, error) {
 	}
 	m, err := e.mailbox()
 	if err != nil {
+		return r, err
+	}
+	if err := e.online(ctx); err != nil {
 		return r, err
 	}
 	for _, old := range e.requestList() {
@@ -157,6 +171,9 @@ func (e *Engine) Requests() []Request { return e.requestList() }
 func (e *Engine) SyncRequests(ctx context.Context) ([]Request, error) {
 	m, err := e.mailbox()
 	if err != nil {
+		return nil, err
+	}
+	if err := e.online(ctx); err != nil {
 		return nil, err
 	}
 	last, _ := strconv.Atoi(e.st.Get(settingLast))
@@ -256,11 +273,17 @@ func (e *Engine) PublishConfig(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := e.online(ctx); err != nil {
+		return err
+	}
 	if _, err := m.SendSelf(ctx, cfgTag+string(body)); err != nil {
 		return err
 	}
 	return e.st.Set("media.cfg_pub", h)
 }
+
+// ClearAnswered removes answered requests from this device's list.
+func (e *Engine) ClearAnswered() (int64, error) { return e.st.MediaReqsClear() }
 
 // Answer tells everyone a request is filed (or won't be).
 func (e *Engine) Answer(ctx context.Context, id string, fulfilled bool) error {
@@ -270,6 +293,9 @@ func (e *Engine) Answer(ctx context.Context, id string, fulfilled bool) error {
 	}
 	m, err := e.mailbox()
 	if err != nil {
+		return err
+	}
+	if err := e.online(ctx); err != nil {
 		return err
 	}
 	tag, state := fulfilTag, "fulfilled"

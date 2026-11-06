@@ -2065,7 +2065,7 @@ function renderRequests(all) {
       el("button", { type: "button", class: "primary", onclick: () => answer(r, true) }, "Mark as filed"),
       el("button", { type: "button", class: "danger", onclick: () => answer(r, false) }, "Decline"),
     ])),
-    done.length ? el("p", { class: "hint" }, "Answered") : null,
+    done.length ? el("p", { class: "hint" }, "Answered ", el("button", { type: "button", class: "small", onclick: () => api("/api/media/clear", {}).then(loadMovies).catch((e) => toast(e.message)) }, "Clear")) : null,
     done.map((r) => row(r, [])));
 }
 

@@ -76,7 +76,7 @@ body.mb-on > header.top, body.mb-on > main#app { display: none; }
 .mb-scroller { display: flex; gap: .7rem; overflow-x: auto; padding: .2rem .9rem .5rem; scroll-snap-type: x proximity; scroll-padding: 0 .9rem; scrollbar-width: none; }
 .mb-scroller > * { scroll-snap-align: start; }
 .mb-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: .8rem .6rem; padding: .3rem .9rem; }
-@media (max-width: 380px) { .mb-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 300px) { .mb-grid { grid-template-columns: repeat(2, 1fr); } }
 @media (min-width: 700px) { .mb-grid { grid-template-columns: repeat(5, 1fr); } }
 .mb-card { background: transparent; border: 0; padding: 0; text-align: left; cursor: pointer; width: 112px; flex: none; }
 .mb-grid .mb-card { width: auto; }
@@ -101,7 +101,7 @@ body.mb-on > header.top, body.mb-on > main#app { display: none; }
 .mb-hero-shade { position: absolute; inset: 0; background: linear-gradient(to top, rgba(12,14,16,.95), rgba(12,14,16,.2) 60%, transparent); }
 .mb-hero-text { position: absolute; left: 0; right: 0; bottom: 0; padding: 1rem; display: flex; flex-direction: column; align-items: flex-start; gap: .4rem; }
 .mb-hero-text h1 { font-size: 1.5rem; line-height: 1.15; }
-.mb-hero-kind { color: var(--mb-muted); font-size: .8rem; }
+.mb-hero-kind { color: #dfe6e2; font-size: .8rem; text-shadow: 0 1px 3px rgba(0,0,0,.8); }
 
 /* details */
 .mb-d-head { position: relative; padding: 4.2rem .9rem 1rem; min-height: 280px; overflow: hidden; }
@@ -174,3 +174,10 @@ body.mb-on > header.top, body.mb-on > main#app { display: none; }
 .mb-set-links { display: flex; gap: 1.2rem; margin-bottom: .8rem; }
 .mb-set-links a { color: var(--mb-accent); }
 .mb-on .toast { bottom: 84px; }
+
+/* the page's own scroll buttons would sit on top of the tab bar */
+body.mb-on .jump { display: none !important; }
+.mb-d-body section > h2 { padding-left: 0; padding-right: 0; }
+.mb-clear { margin-left: auto; }
+
+.mb-top.over.solid { background: var(--mb-bg); border-bottom: 1px solid var(--mb-line); }

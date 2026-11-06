@@ -179,3 +179,19 @@ func TestPCSharesItsKeysWithThePhoneThroughSavedMessages(t *testing.T) {
 		t.Error("the phone must not post configuration")
 	}
 }
+
+func TestClearAnsweredKeepsWhatIsWaiting(t *testing.T) {
+	pc, phone, _ := phoneAndPC(t)
+	ctx := context.Background()
+	a, _ := phone.MakeRequest(ctx, Request{Kind: "movie", TMDB: 1, Title: "Up"})
+	phone.MakeRequest(ctx, Request{Kind: "movie", TMDB: 2, Title: "Heat"})
+	pc.SyncRequests(ctx)
+	pc.Answer(ctx, a.ID, true)
+	if n, err := pc.ClearAnswered(); err != nil || n != 1 {
+		t.Fatalf("cleared %d: %v", n, err)
+	}
+	left := pc.Requests()
+	if len(left) != 1 || left[0].Title != "Heat" || left[0].State != "requested" {
+		t.Errorf("only the waiting request stays: %+v", left)
+	}
+}

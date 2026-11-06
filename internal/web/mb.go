@@ -105,15 +105,31 @@ func (r tmdbRow) item(defKind string) (mbItem, bool) {
 // lookups of what's in the library and what has been asked for, so that every
 // card can say so.
 type mbMarks struct {
-	lib  map[string]bool // kind|norm
+	lib  map[string][]int // kind|norm -> the years of the library titles with that name (0: no year)
 	reqs map[string]string
 }
 
+// yearOK says whether a library title (its folder may carry a year) is the
+// one TMDB means: two shows can share a name, and only one of them is here.
+func yearOK(libYear, year int) bool {
+	return libYear == 0 || year == 0 || libYear == year || libYear == year-1 || libYear == year+1
+}
+
+func (m mbMarks) has(kind, title string, year int) bool {
+	for _, y := range m.lib[kind+"|"+media.Norm(title)] {
+		if yearOK(y, year) {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Server) marks() mbMarks {
-	m := mbMarks{lib: map[string]bool{}, reqs: map[string]string{}}
+	m := mbMarks{lib: map[string][]int{}, reqs: map[string]string{}}
 	if lib, err := s.eng.Library(); err == nil {
 		for _, t := range lib {
-			m.lib[t.Kind+"|"+t.Norm] = true
+			k := t.Kind + "|" + t.Norm
+			m.lib[k] = append(m.lib[k], t.Year)
 		}
 	}
 	for _, r := range s.eng.Requests() { // newest first: keep the newest state
@@ -126,7 +142,7 @@ func (s *Server) marks() mbMarks {
 }
 
 func (m mbMarks) mark(it *mbItem) {
-	it.InLibrary = m.lib[it.Kind+"|"+media.Norm(it.Title)]
+	it.InLibrary = m.has(it.Kind, it.Title, it.Year)
 	it.Request = m.reqs[it.Kind+"|"+strconv.Itoa(it.ID)]
 }
 
@@ -388,7 +404,7 @@ func (s *Server) mbTitle(w http.ResponseWriter, r *http.Request) {
 	var lib *backup.LibTitle
 	if all, err := s.eng.Library(); err == nil {
 		for i := range all {
-			if all[i].Kind == kind && all[i].Norm == media.Norm(it.Title) {
+			if all[i].Kind == kind && all[i].Norm == media.Norm(it.Title) && yearOK(all[i].Year, it.Year) {
 				lib = &all[i]
 			}
 		}
@@ -459,9 +475,10 @@ func (s *Server) mbSeason(w http.ResponseWriter, r *http.Request) {
 	}
 	have := map[int]backup.LibFile{}
 	title := r.URL.Query().Get("title")
+	year, _ := strconv.Atoi(r.URL.Query().Get("year"))
 	if lib, err := s.eng.Library(); err == nil {
 		for _, t := range lib {
-			if t.Kind != "show" || t.Norm != media.Norm(title) {
+			if t.Kind != "show" || t.Norm != media.Norm(title) || !yearOK(t.Year, year) {
 				continue
 			}
 			for _, sn := range t.Seasons {
@@ -570,12 +587,25 @@ func (s *Server) mbRequests(w http.ResponseWriter, r *http.Request) {
 		backup.Request
 		Available bool `json:"available"`
 	}
-	have := s.marks().lib
+	marks := s.marks()
 	out := []reqM{}
 	for _, q := range s.eng.Requests() {
-		out = append(out, reqM{q, have[q.Kind+"|"+media.Norm(q.Title)]})
+		kind := "movie"
+		if q.Kind == "show" {
+			kind = "show"
+		}
+		out = append(out, reqM{q, marks.has(kind, q.Title, q.Year)})
 	}
 	writeJSON(w, map[string]any{"requests": out})
+}
+
+func (s *Server) mbRequestsClear(w http.ResponseWriter, r *http.Request) {
+	n, err := s.eng.ClearAnswered()
+	if err != nil {
+		fail(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, map[string]any{"cleared": n})
 }
 
 // ---- the library ----

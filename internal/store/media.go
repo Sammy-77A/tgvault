@@ -171,3 +171,12 @@ func (s *Store) MediaReq(id string) (MediaRequest, bool) {
 		Scan(&r.ID, &r.MsgID, &r.State, &r.Body, &r.At)
 	return r, err == nil
 }
+
+// MediaReqsClear forgets requests that have been answered.
+func (s *Store) MediaReqsClear() (int64, error) {
+	r, err := s.db.Exec(`DELETE FROM media_requests WHERE state<>'requested'`)
+	if err != nil {
+		return 0, err
+	}
+	return r.RowsAffected()
+}
