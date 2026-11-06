@@ -40,6 +40,7 @@ var (
 	dlBackoffUnit = 2 * time.Second // the first wait; it doubles each try
 	dlOfflineWait = 5 * time.Second // how long to wait for a connection to come back
 	dlPoll        = 2 * time.Second // how often the queue is looked at
+	dlStall       = 45 * time.Second // no bytes for this long and the attempt is abandoned and resumed
 )
 
 // rangeDownloader is a Telegram connection that can start a download part-way.
@@ -68,6 +69,7 @@ type dlLive struct {
 	lastAt   time.Time
 	lastDone int64
 	speed    float64
+	lastData time.Time // when bytes last arrived (or the attempt began)
 }
 
 type dlState struct {
@@ -116,9 +118,12 @@ func (e *Engine) dlItem(d store.MBDownload) DLItem {
 		Error: d.Err, Attempts: d.Attempts}
 	e.dl.mu.Lock()
 	if l := e.dl.live[d.Path]; l != nil && d.State == "running" {
-		it.Speed = l.speed
-		if l.speed > 1 && d.Size > d.Done {
-			it.ETA = int(float64(d.Size-d.Done) / l.speed)
+		// no data for a few seconds means no speed, not the last good one
+		if time.Since(l.lastData) < 6*time.Second {
+			it.Speed = l.speed
+		}
+		if it.Speed > 1 && d.Size > d.Done {
+			it.ETA = int(float64(d.Size-d.Done) / it.Speed)
 		}
 	}
 	it.Waiting = e.dl.waiting[d.Path]
@@ -132,15 +137,24 @@ func (e *Engine) Downloads() []DLItem {
 	out := make([]DLItem, 0, len(rows))
 	for _, d := range rows {
 		it := e.dlItem(d)
-		// the byte count of a running download is the file as it stands
-		if d.State == "running" {
-			if fi, err := os.Stat(e.MediaLocal(d.Path) + ".part"); err == nil && fi.Size() > it.Done {
-				it.Done = fi.Size()
+		// what has arrived is the file as it stands, running or not: a paused
+		// download keeps its progress and carries on from it
+		if d.State != "done" {
+			if n := e.dlPartSize(d.Path); n > it.Done {
+				it.Done = n
 			}
 		}
 		out = append(out, it)
 	}
 	return out
+}
+
+// dlPartSize is how much of a download is on disk.
+func (e *Engine) dlPartSize(p string) int64 {
+	if fi, err := os.Stat(e.MediaLocal(p) + ".part"); err == nil {
+		return fi.Size()
+	}
+	return 0
 }
 
 // QueueDownloads asks for library videos (with the subtitles beside them) to
@@ -402,7 +416,7 @@ func (e *Engine) dlEvent(ev, p string) {
 // dlRun does one attempt at one download.
 func (e *Engine) dlRun(d store.MBDownload) {
 	ctx, cancel := context.WithCancel(context.Background())
-	live := &dlLive{cancel: cancel, lastAt: time.Now()}
+	live := &dlLive{cancel: cancel, lastAt: time.Now(), lastData: time.Now()}
 	e.dl.mu.Lock()
 	e.dl.live[d.Path] = live
 	delete(e.dl.waiting, d.Path)
@@ -412,6 +426,35 @@ func (e *Engine) dlRun(d store.MBDownload) {
 		e.dl.mu.Lock()
 		delete(e.dl.live, d.Path)
 		e.dl.mu.Unlock()
+	}()
+
+	// A connection can die without saying so (the phone changes network, the
+	// radio sleeps). A transfer that gets no bytes for a while is abandoned and
+	// carries on from the last whole block, rather than hanging for ever.
+	go func() {
+		t := time.NewTicker(dlStall / 6)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				e.dl.mu.Lock()
+				stalled := live.reason == "" && time.Since(live.lastData) > dlStall
+				if stalled {
+					live.reason = "stall"
+				}
+				e.dl.mu.Unlock()
+				if stalled {
+					log.Printf("download %s: no data for %s; starting this try over from what has arrived", d.Path, dlStall)
+					if rc, ok := e.tg.(interface{ Reconnect() }); ok {
+						rc.Reconnect()
+					}
+					cancel()
+					return
+				}
+			}
+		}
 	}()
 
 	vs, _ := e.st.LatestUnder(d.Path)
@@ -435,8 +478,12 @@ func (e *Engine) dlRun(d store.MBDownload) {
 	wctx, wcancel := context.WithTimeout(ctx, 20*time.Second)
 	werr := e.tg.WaitReady(wctx)
 	wcancel()
+	e.dl.mu.Lock()
+	live.lastData = time.Now() // waiting for the connection isn't a stall
+	stalledWait := live.reason == "stall"
+	e.dl.mu.Unlock()
 	if werr != nil {
-		if ctx.Err() == nil {
+		if ctx.Err() == nil || stalledWait {
 			e.dl.mu.Lock()
 			e.dl.waiting[d.Path] = "Waiting for a connection"
 			e.dl.mu.Unlock()
@@ -461,6 +508,8 @@ func (e *Engine) dlRun(d store.MBDownload) {
 		return // the row was set to paused by the caller; the part file stays
 	case live2 == "cancel":
 		return
+	case live2 == "stall":
+		e.dlFail(d, e.dlPartSize(d.Path)/tgclient.BlockSize*tgclient.BlockSize, errors.New("the connection stalled"), false)
 	case errors.Is(err, errNoSpace):
 		_ = e.st.DLSet(d.Path, "failed", d.Done, err.Error(), d.Attempts, 0)
 		e.dlEvent("failed", d.Path)
@@ -490,6 +539,7 @@ func (p *progressWriter) Write(b []byte) (int, error) {
 	p.done += int64(n)
 	now := time.Now()
 	p.e.dl.mu.Lock()
+	p.live.lastData = now
 	if dt := now.Sub(p.live.lastAt); dt >= time.Second {
 		inst := float64(p.done-p.live.lastDone) / dt.Seconds()
 		if p.live.speed == 0 {

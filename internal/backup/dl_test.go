@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,7 +16,7 @@ import (
 )
 
 func init() {
-	dlBackoffUnit, dlOfflineWait, dlPoll = time.Millisecond, 30*time.Millisecond, 15*time.Millisecond
+	dlBackoffUnit, dlOfflineWait, dlPoll, dlStall = time.Millisecond, 30*time.Millisecond, 15*time.Millisecond, 300*time.Millisecond
 }
 
 // waitDownloads waits until nothing is queued or running.
@@ -132,6 +133,11 @@ func TestPauseKeepsTheProgressAndResumeFinishes(t *testing.T) {
 	part, err := os.Stat(e.MediaLocal(p) + ".part")
 	if err != nil || part.Size() < tgclient.BlockSize {
 		t.Fatalf("the part must stay: %v", err)
+	}
+	for _, it := range e.Downloads() {
+		if it.Path == p && it.Done < tgclient.BlockSize {
+			t.Errorf("a paused download keeps showing its progress, not zero: %+v", it)
+		}
 	}
 	close(gate)
 	tg.mu.Lock()
@@ -257,5 +263,31 @@ func TestTheQueueSurvivesARestart(t *testing.T) {
 	got, _ := os.ReadFile(e.MediaLocal(p))
 	if !bytes.Equal(got, data) {
 		t.Fatal("after a restart the download carries on and finishes")
+	}
+}
+
+func TestADownloadThatGoesQuietIsAbandonedAndResumed(t *testing.T) {
+	e, tg, p, data := bigRig(t)
+	var once sync.Once
+	tg.dlFault = func(ctx context.Context, _ int, off int64) error {
+		if off == tgclient.BlockSize {
+			hang := false
+			once.Do(func() { hang = true })
+			if hang { // the connection died without a word
+				<-ctx.Done()
+				return ctx.Err()
+			}
+		}
+		return nil
+	}
+	e.QueueDownloads(context.Background(), []string{p})
+	waitDownloads(t, e)
+	d, _ := e.st.DLGet(p)
+	if d.State != "done" || d.Attempts != 0 {
+		t.Fatalf("a stall is waited out without using up tries: %+v", d)
+	}
+	got, _ := os.ReadFile(e.MediaLocal(p))
+	if !bytes.Equal(got, data) {
+		t.Fatal("the file should be whole")
 	}
 }

@@ -437,6 +437,8 @@ func (c *Client) Exists(ctx context.Context, ids []int) (map[int]RemoteFile, err
 // in 1 MB pieces at 1 MB boundaries.
 const BlockSize = 1 << 20
 
+const blockTimeout = 90 * time.Second
+
 // fileLoc is where Telegram keeps a message's file. Its file reference
 // expires after a while, so it's looked up again when Telegram says so.
 type fileLoc struct {
@@ -460,7 +462,10 @@ func (c *Client) ReadBlock(ctx context.Context, msgID int, n int64) ([]byte, err
 		if err != nil {
 			return nil, err
 		}
-		res, err := api.UploadGetFile(ctx, &tg.UploadGetFileRequest{Location: fl.loc, Offset: n * BlockSize, Limit: BlockSize})
+		// a request on a connection that died silently would wait for ever
+		rctx, rcancel := context.WithTimeout(ctx, blockTimeout)
+		res, err := api.UploadGetFile(rctx, &tg.UploadGetFileRequest{Location: fl.loc, Offset: n * BlockSize, Limit: BlockSize})
+		rcancel()
 		if err != nil {
 			if attempt == 0 && tgerr.Is(err, "FILE_REFERENCE_EXPIRED", "FILE_REFERENCE_INVALID") {
 				continue // look the file up again

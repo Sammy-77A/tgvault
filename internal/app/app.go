@@ -85,7 +85,7 @@ func Start(ctx context.Context, o Options) (*App, error) {
 		// doesn't freeze; outside it, stay connected only for running tasks.
 		// The grace period is short because the phone freezes idle apps soon.
 		tg.DisconnectWhenIdle(func() bool {
-			return a.foreground.Load() || a.backups.Load() > 0 || eng.TasksRunning()
+			return a.foreground.Load() || a.backups.Load() > 0 || eng.TasksRunning() || eng.DownloadsActive()
 		}, 15*time.Second)
 		eng.Configure(backup.Config{Device: meta.DevicePhone, NoProjects: true,
 			SkipDirs: []string{a.phone.DownloadDir()}, FileChanged: p.FileChanged})
