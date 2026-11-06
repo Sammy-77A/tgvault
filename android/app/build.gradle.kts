@@ -22,6 +22,7 @@ android {
         buildConfigField("String", "TMDB_KEY", "\"${System.getenv("TMDB_KEY") ?: ""}\"")
         buildConfigField("String", "SUBTITLE_KEY", "\"${System.getenv("SUBTITLE_KEY") ?: ""}\"")
         manifestPlaceholders["appLabel"] = if (libraryFolder.isEmpty()) "tgvault" else libraryFolder.substringAfterLast('/')
+        manifestPlaceholders["appIcon"] = if (libraryFolder.isEmpty()) "@mipmap/ic_launcher" else "@mipmap/ic_launcher_tgmb"
         minSdk = 26
         targetSdk = 35
         versionCode = (System.getenv("TGVAULT_VERSION_CODE") ?: "1").toInt()
