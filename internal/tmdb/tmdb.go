@@ -6,12 +6,16 @@ package tmdb
 
 import (
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -220,41 +224,112 @@ func (c *Client) SeasonEpisodes(ctx context.Context, tvID, season int) ([]Episod
 
 type cacheEntry struct {
 	body    []byte
-	expires time.Time
+	fetched time.Time
 }
 
 var (
-	cacheMu sync.Mutex
-	cache   = map[string]cacheEntry{}
+	cacheMu  sync.Mutex
+	cache    = map[string]cacheEntry{}
+	inflight = map[string]bool{}
+	cacheDir string
 )
 
-// Raw returns TMDB's JSON for a path such as "/movie/603", cached for ttl so
-// that browsing doesn't spend the daily allowance (and works a while offline).
-func (c *Client) Raw(ctx context.Context, p string, q url.Values, ttl time.Duration) (json.RawMessage, error) {
-	key := p + "?" + q.Encode()
+// maxStale is how old an answer may be and still be shown (while a fresh one
+// is fetched in the background, or when there is no connection at all).
+const maxStale = 45 * 24 * time.Hour
+
+// SetCacheDir makes answers survive restarts, so the app can show titles,
+// seasons and posters it has seen before with no connection.
+func SetCacheDir(dir string) {
 	cacheMu.Lock()
-	if e, ok := cache[key]; ok && time.Now().Before(e.expires) {
-		cacheMu.Unlock()
-		return e.body, nil
+	defer cacheMu.Unlock()
+	cacheDir = dir
+	if dir != "" {
+		_ = os.MkdirAll(dir, 0o700)
 	}
-	cacheMu.Unlock()
-	var raw json.RawMessage
-	if err := c.get(ctx, p, cloneValues(q), &raw); err != nil {
-		// stale is better than nothing when offline
-		cacheMu.Lock()
-		e, ok := cache[key]
-		cacheMu.Unlock()
-		if ok {
-			return e.body, nil
-		}
-		return nil, err
-	}
+}
+
+func diskName(key string) string {
+	sum := sha1.Sum([]byte(key))
+	return filepath.Join(cacheDir, hex.EncodeToString(sum[:])+".json")
+}
+
+func lookup(key string) (cacheEntry, bool) {
 	cacheMu.Lock()
-	if len(cache) > 500 {
+	defer cacheMu.Unlock()
+	if e, ok := cache[key]; ok {
+		return e, true
+	}
+	if cacheDir == "" {
+		return cacheEntry{}, false
+	}
+	b, err := os.ReadFile(diskName(key))
+	if err != nil {
+		return cacheEntry{}, false
+	}
+	fi, err := os.Stat(diskName(key))
+	if err != nil {
+		return cacheEntry{}, false
+	}
+	e := cacheEntry{body: b, fetched: fi.ModTime()}
+	cache[key] = e
+	return e, true
+}
+
+func store(key string, body []byte) {
+	cacheMu.Lock()
+	defer cacheMu.Unlock()
+	if len(cache) > 800 {
 		cache = map[string]cacheEntry{}
 	}
-	cache[key] = cacheEntry{raw, time.Now().Add(ttl)}
-	cacheMu.Unlock()
+	cache[key] = cacheEntry{body, time.Now()}
+	if cacheDir != "" {
+		tmp := diskName(key) + ".tmp"
+		if os.WriteFile(tmp, body, 0o600) == nil {
+			_ = os.Rename(tmp, diskName(key))
+		}
+	}
+}
+
+// Raw returns TMDB's JSON for a path such as "/movie/603". An answer younger
+// than ttl is returned as is. An older one is returned at once (up to
+// maxStale) while a fresh one is fetched in the background, so pages open
+// instantly; with no answer cached, the request waits for TMDB.
+func (c *Client) Raw(ctx context.Context, p string, q url.Values, ttl time.Duration) (json.RawMessage, error) {
+	key := p + "?" + q.Encode()
+	if e, ok := lookup(key); ok {
+		age := time.Since(e.fetched)
+		if age < ttl {
+			return e.body, nil
+		}
+		if age < maxStale {
+			cacheMu.Lock()
+			already := inflight[key]
+			inflight[key] = true
+			cacheMu.Unlock()
+			if !already {
+				go func() {
+					defer func() {
+						cacheMu.Lock()
+						delete(inflight, key)
+						cacheMu.Unlock()
+					}()
+					bg, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cancel()
+					var raw json.RawMessage
+					if c.get(bg, p, cloneValues(q), &raw) == nil {
+						store(key, raw)
+					}
+				}()
+			}
+			return e.body, nil
+		}
+	}
+	var raw json.RawMessage
+	if err := c.get(ctx, p, cloneValues(q), &raw); err != nil {
+		return nil, err
+	}
+	store(key, raw)
 	return raw, nil
 }
 

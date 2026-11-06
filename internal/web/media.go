@@ -25,9 +25,11 @@ func (s *Server) media(w http.ResponseWriter, r *http.Request) {
 	}
 	// pick up requests made since the last check (the background watcher does
 	// this too; this is for when the page is opened first)
-	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
-	_, _ = s.eng.SyncRequests(ctx)
-	cancel()
+	if s.eng.Connected() {
+		ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+		_, _ = s.eng.SyncRequests(ctx)
+		cancel()
+	}
 	writeJSON(w, map[string]any{"hasKey": s.eng.HasTMDBKey(), "root": s.eng.MediaRoot(), "review": rv,
 		"requests": s.eng.Requests(), "hasSubs": strings.TrimSpace(s.st.Get(backup.SettingSubtitleKey)) != ""})
 }
@@ -126,4 +128,8 @@ func (s *Server) mediaAnswer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"ok": true})
+}
+
+func (s *Server) mediaLog(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, map[string]any{"log": s.eng.SortLog(200)})
 }

@@ -8,7 +8,9 @@ import (
 	"path"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Sammy-77A/tgvault/internal/media"
 	"github.com/Sammy-77A/tgvault/internal/store"
@@ -502,11 +504,10 @@ func destination(root string, g Guess, from string) string {
 
 // ---- running it ----
 
-// OrganizeMedia sorts whatever is loose in the library folder. It returns the
-// task that shows progress; files it can't place go to the review list.
+// OrganizeMedia sorts whatever is loose in the library folder, now. It returns
+// the task that shows progress; files it cannot place go to the review list.
 func (e *Engine) OrganizeMedia(ctx context.Context) (int64, error) {
-	db, err := e.tmdbClient()
-	if err != nil {
+	if _, err := e.tmdbClient(); err != nil {
 		return 0, err
 	}
 	files, err := e.inbox()
@@ -516,14 +517,30 @@ func (e *Engine) OrganizeMedia(ctx context.Context) (int64, error) {
 	if len(files) == 0 {
 		return 0, errors.New("nothing to sort: every video in the library folder is already filed")
 	}
-	t := e.newTask("organize", "Sorting movies and shows")
+	return e.organize(ctx, files, false)
+}
+
+// organize decides and files the given files. In auto mode a success is only
+// written to the log; problems also go to the owner (see SetSortHook).
+func (e *Engine) organize(ctx context.Context, files []string, auto bool) (int64, error) {
+	db, err := e.tmdbClient()
+	if err != nil {
+		return 0, err
+	}
+	title := "Sorting movies and shows"
+	if auto {
+		title = "Sorting new files"
+	}
+	t := e.newTask("organize", title)
 	t.update(func(t *Task) { t.Total = len(files) })
 	go func() {
 		ctx := context.WithoutCancel(ctx)
 		lk := newLookup(db)
 		var moves []relocation
+		guesses := map[string]Guess{}
 		taken := map[string]string{} // destination -> file claiming it
 		sorted, asked, waiting := 0, 0, 0
+		var problems []string
 		for _, p := range files {
 			t.update(func(t *Task) { t.Current = path.Base(p) })
 			d := e.decide(ctx, lk, p)
@@ -544,14 +561,21 @@ func (e *Engine) OrganizeMedia(ctx context.Context) (int64, error) {
 				if d.to != "" {
 					taken[d.to] = p
 					moves = append(moves, relocation{p, d.to})
+					guesses[d.to] = d.guess
 					_ = e.st.MediaDrop(p)
 					sorted++
 					break
 				}
-				fallthrough
+				body, _ := json.Marshal(d.body)
+				_ = e.st.MediaPut(p, "review", d.reason, string(body))
+				e.st.MediaLogAdd("duplicate", p, d.reason)
+				problems = append(problems, path.Base(p)+": "+d.reason)
+				asked++
 			default:
 				body, _ := json.Marshal(d.body)
 				_ = e.st.MediaPut(p, "review", d.reason, string(body))
+				e.st.MediaLogAdd("review", p, d.reason)
+				problems = append(problems, path.Base(p)+": "+d.reason)
 				asked++
 			}
 			t.update(func(t *Task) { t.Done++ })
@@ -563,13 +587,80 @@ func (e *Engine) OrganizeMedia(ctx context.Context) (int64, error) {
 			}
 		})
 		if len(moves) > 0 {
-			if _, err := e.relocate(ctx, fmt.Sprintf("Filing %d video(s) into the library", len(moves)), moves); err != nil {
+			id, err := e.relocate(ctx, fmt.Sprintf("Filing %d video(s) into the library", len(moves)), moves)
+			if err != nil {
 				t.update(func(t *Task) { t.Errors = append(t.Errors, err.Error()) })
+				e.st.MediaLogAdd("failed", "", err.Error())
+				problems = append(problems, err.Error())
+			} else {
+				e.awaitTask(id)
+				e.logMoves(id, moves, guesses, &problems)
 			}
 		}
 		t.update(func(t *Task) { t.Finished, t.Current = true, "" })
+		if len(problems) > 0 && e.sortHook != nil {
+			e.sortHook(problems)
+		}
+		if sorted > 0 {
+			e.FulfilRequests(ctx)
+		}
 	}()
 	return t.ID, nil
+}
+
+// awaitTask waits for a task to finish.
+func (e *Engine) awaitTask(id int64) {
+	for i := 0; i < 6000; i++ {
+		done := true
+		for _, tv := range e.Status().Tasks {
+			if tv.ID == id && !tv.Finished {
+				done = false
+			}
+		}
+		if done {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// logMoves writes what a filing task did: a line for each file that moved, and
+// each one that could not.
+func (e *Engine) logMoves(id int64, moves []relocation, guesses map[string]Guess, problems *[]string) {
+	failed := map[string]string{}
+	for _, tv := range e.Status().Tasks {
+		if tv.ID != id {
+			continue
+		}
+		for _, msg := range tv.Errors {
+			matched := false
+			for _, m := range moves {
+				if strings.HasPrefix(msg, m.from+":") {
+					failed[m.from] = strings.TrimPrefix(msg, m.from+": ")
+					matched = true
+				}
+			}
+			if !matched {
+				*problems = append(*problems, msg)
+			}
+		}
+	}
+	for _, m := range moves {
+		if why, bad := failed[m.from]; bad {
+			e.st.MediaLogAdd("failed", m.from, why)
+			*problems = append(*problems, path.Base(m.from)+": "+why)
+			continue
+		}
+		e.st.MediaLogAdd("sorted", m.from, "→ "+strings.TrimPrefix(m.to, e.MediaRoot()+"/"))
+		g := guesses[m.to]
+		if g.TMDB > 0 && media.IsVideo(path.Ext(m.to)) {
+			eps := make([]string, len(g.Episodes))
+			for i, n := range g.Episodes {
+				eps[i] = strconv.Itoa(n)
+			}
+			_ = e.st.MediaFiledPut(store.MediaFiled{Path: m.to, Kind: g.Kind, TMDB: g.TMDB, Season: g.Season, Episodes: strings.Join(eps, ",")})
+		}
+	}
 }
 
 // ResolveMedia applies the owner's decision for a file in the review list.
@@ -620,6 +711,7 @@ func (e *Engine) ResolveMedia(ctx context.Context, cloudPath string, g Guess) er
 		return errors.New("your library already has " + path.Base(to))
 	}
 	moves := []relocation{{cloudPath, to}}
+	guesses := map[string]Guess{to: g}
 	taken := map[string]bool{to: true}
 	// Every other file waiting under the same name follows the same answer, so
 	// a whole season is one decision, not one per episode.
@@ -647,6 +739,7 @@ func (e *Engine) ResolveMedia(ctx context.Context, cloudPath string, g Guess) er
 				continue
 			}
 			taken[dst] = true
+			guesses[dst] = og
 			moves = append(moves, relocation{n.CloudPath, dst})
 		}
 	}
@@ -654,12 +747,23 @@ func (e *Engine) ResolveMedia(ctx context.Context, cloudPath string, g Guess) er
 	if len(moves) > 1 {
 		title = fmt.Sprintf("Filing %d files as %s", len(moves), g.Title)
 	}
-	if _, err := e.relocate(ctx, title, moves); err != nil {
+	id, err := e.relocate(ctx, title, moves)
+	if err != nil {
 		return err
 	}
 	for _, m := range moves {
 		_ = e.st.MediaDrop(m.from)
 	}
+	go func() {
+		ctx := context.WithoutCancel(ctx)
+		e.awaitTask(id)
+		var problems []string
+		e.logMoves(id, moves, guesses, &problems)
+		if len(problems) > 0 && e.sortHook != nil {
+			e.sortHook(problems)
+		}
+		e.FulfilRequests(ctx)
+	}()
 	return nil
 }
 

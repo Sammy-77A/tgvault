@@ -369,3 +369,13 @@ body.viewing > .jump.page { display: none; }
 .req-row img, .req-noposter { width: 46px; height: 69px; border-radius: 6px; object-fit: cover; background: var(--line); flex: none; }
 .req-main { flex: 1; min-width: 0; }
 .req-actions { display: flex; gap: .4rem; flex-wrap: wrap; justify-content: flex-end; }
+
+.log { max-height: 320px; overflow-y: auto; font-size: .88rem; }
+.log-row { display: flex; gap: .6rem; padding: .25rem 0; border-top: 1px solid var(--line); }
+.log-row:first-child { border-top: 0; }
+.log-k { width: 1.2rem; text-align: center; flex: none; }
+.log-row.failed .log-k, .log-row.duplicate .log-k { color: var(--bad); }
+.log-row.review .log-k { color: var(--warn); }
+.log-row.sorted .log-k, .log-row.request .log-k { color: var(--ok); }
+.log-t { color: var(--muted); flex: none; width: 5.5rem; }
+.log-d { word-break: break-word; }

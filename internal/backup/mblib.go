@@ -220,66 +220,6 @@ func parseSeasonDir(name string) int {
 // inLibrary reports whether a cloud path is inside the movie library.
 func (e *Engine) inMediaRoot(p string) bool { return underPrefix(p, e.MediaRoot()) }
 
-// DownloadMedia downloads library videos (each with the subtitles beside it)
-// to this device for watching offline.
-func (e *Engine) DownloadMedia(ctx context.Context, paths []string) (int64, error) {
-	root := e.MediaRoot()
-	byDest := map[string][]string{}
-	var order []string
-	add := func(p string) {
-		parent := path.Dir(p)
-		dest := filepath.Join(e.dataDir, "mb", filepath.FromSlash(strings.TrimPrefix(parent, root)))
-		if _, ok := byDest[dest]; !ok {
-			order = append(order, dest)
-		}
-		byDest[dest] = append(byDest[dest], p)
-	}
-	seen := map[string]bool{}
-	for _, p := range paths {
-		if !e.inMediaRoot(p) || p == root {
-			return 0, errors.New("that isn't in the library")
-		}
-		vs, err := e.st.LatestUnder(p)
-		if err != nil {
-			return 0, err
-		}
-		for _, v := range vs {
-			if seen[v.CloudPath] || e.haveLocal(v) {
-				continue
-			}
-			seen[v.CloudPath] = true
-			add(v.CloudPath)
-			// the subtitles that go with a video come along
-			if media.IsVideo(path.Ext(v.CloudPath)) {
-				stem := strings.TrimSuffix(path.Base(v.CloudPath), path.Ext(v.CloudPath))
-				sibs, _ := e.st.LatestUnder(path.Dir(v.CloudPath))
-				for _, s := range sibs {
-					if path.Dir(s.CloudPath) == path.Dir(v.CloudPath) && media.IsSubtitle(path.Ext(s.CloudPath)) &&
-						strings.HasPrefix(strings.TrimSuffix(path.Base(s.CloudPath), path.Ext(s.CloudPath)), stem) &&
-						!seen[s.CloudPath] && !e.haveLocal(s) {
-						seen[s.CloudPath] = true
-						add(s.CloudPath)
-					}
-				}
-			}
-		}
-	}
-	if len(order) == 0 {
-		return 0, errors.New("already on this phone")
-	}
-	// One task per destination folder would clutter the activity list, so run
-	// them one after another inside a single task by chaining.
-	var last int64
-	for _, dest := range order {
-		id, err := e.RestoreMany(ctx, byDest[dest], dest, "Downloading", nil)
-		if err != nil {
-			return last, err
-		}
-		last = id
-	}
-	return last, nil
-}
-
 // RemoveMedia deletes downloaded copies from this device (the library in
 // Telegram is untouched).
 func (e *Engine) RemoveMedia(paths []string) (int, error) {
@@ -364,6 +304,9 @@ func (e *Engine) MediaDiskUsage() int64 {
 // just the library's files, which is cheap, and does nothing when it can't
 // get an answer.
 func (e *Engine) RefreshLibrary(ctx context.Context) {
+	if !e.Connected() {
+		return
+	}
 	vs, err := e.st.VersionsUnder(e.MediaRoot())
 	if err != nil || len(vs) == 0 {
 		return

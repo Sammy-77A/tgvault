@@ -29,6 +29,8 @@ type fakeTG struct {
 	badDownloads map[int]int   // message ID -> how many downloads return corrupt data
 	editFails    map[int]error // message ID -> error from EditCaption
 	self         []selfMsg     // Saved Messages
+	dlCalls      []int64       // the offsets downloads started at
+	dlFault      func(ctx context.Context, id int, offset int64) error
 }
 
 type fakeMsg struct {
@@ -92,10 +94,46 @@ func (f *fakeTG) Download(ctx context.Context, id int, w io.Writer) error {
 	}
 	f.mu.Unlock()
 	if !ok {
-		return errors.New("this file is no longer in the Telegram channel")
+		return tgclient.ErrGone
 	}
 	_, err := w.Write(data)
 	return err
+}
+
+// DownloadFrom is Download from a block boundary, in 1 MB blocks. dlFault, when
+// set, is asked before each block and may fail it (a 503, a dropped connection).
+func (f *fakeTG) DownloadFrom(ctx context.Context, id int, offset int64, w io.Writer) error {
+	f.mu.Lock()
+	m, ok := f.msgs[id]
+	var data []byte
+	if ok {
+		data = append([]byte(nil), m.data...)
+		if f.badDownloads[id] > 0 {
+			f.badDownloads[id]--
+			data[len(data)/2] ^= 0xff
+		}
+	}
+	f.dlCalls = append(f.dlCalls, offset)
+	fault := f.dlFault
+	f.mu.Unlock()
+	if !ok {
+		return tgclient.ErrGone
+	}
+	for off := offset; off < int64(len(data)); off += tgclient.BlockSize {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if fault != nil {
+			if err := fault(ctx, id, off); err != nil {
+				return err
+			}
+		}
+		end := min(off+tgclient.BlockSize, int64(len(data)))
+		if _, err := w.Write(data[off:end]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (f *fakeTG) ReadBlock(ctx context.Context, id int, n int64) ([]byte, error) {

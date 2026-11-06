@@ -186,3 +186,35 @@ body.mb-on .jump { display: none !important; }
 
 .mb-librarypage .mb-searchpage { padding-bottom: .4rem; }
 .mb-more-hint { text-align: center; padding: 1rem; }
+
+.mb-status { font-size: .72rem; font-weight: 700; padding: .15rem .55rem; border-radius: 999px; background: rgba(240,178,74,.2); color: var(--mb-warn); white-space: nowrap; }
+.mb-status[hidden] { display: none; }
+
+.mb-banner { display: flex; align-items: center; gap: .6rem; padding: 0; }
+.mb-banner[hidden] { display: none; }
+.mb-banner-main { flex: 1; background: transparent; border: 0; color: inherit; text-align: left; padding: .45rem .9rem; font: inherit; font-weight: 500; cursor: pointer; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mb-banner-btn { background: rgba(0,0,0,.2); border: 0; color: inherit; border-radius: 8px; padding: .3rem .8rem; margin-right: .6rem; font-weight: 700; cursor: pointer; }
+.mb-dl { margin: .4rem 0 .2rem; width: 100%; }
+.mb-dl-text { font-size: .8rem; color: var(--mb-muted); margin-bottom: .25rem; }
+.mb-progress.thick { height: 6px; border-radius: 3px; }
+.mb-progress.bad span { background: var(--mb-bad); }
+.mb-dl-btns { display: flex; gap: 1rem; margin-top: .2rem; }
+.mb-link.bad { color: var(--mb-bad) !important; }
+.mb-ep-dl { font-size: .8rem; color: var(--mb-accent); min-width: 2.2rem; text-align: right; }
+.mb-queue { padding: 0 .9rem .5rem !important; }
+.mb-queue .mb-row-head { padding-left: 0; padding-right: 0; }
+.mb-queue-item { background: var(--mb-card); border: 1px solid var(--mb-line); border-radius: 12px; padding: .7rem .8rem; margin-bottom: .5rem; }
+
+/* placeholders while data loads */
+.mb-skeleton { padding: .6rem .9rem; }
+.mb-sk { background: linear-gradient(90deg, var(--mb-card) 25%, var(--mb-card2) 37%, var(--mb-card) 63%); background-size: 400% 100%; animation: mb-shimmer 1.3s ease infinite; border-radius: 10px; }
+@keyframes mb-shimmer { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
+.mb-sk-hero { height: 190px; margin-bottom: 1rem; border-radius: 14px; }
+.mb-sk-poster { aspect-ratio: 2 / 3; }
+.mb-sk-line { height: 12px; margin: .5rem 0; }
+.mb-sk-line.short { width: 55%; }
+.mb-sk-line.wide { height: 22px; width: 70%; margin: 1rem 0; }
+.mb-sk-row { display: flex; gap: .7rem; margin-bottom: 1rem; }
+.mb-sk-row .mb-sk-card { width: 100px; flex: none; }
+.mb-sk-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: .8rem .6rem; }
+@media (prefers-reduced-motion: reduce) { .mb-sk { animation: none; } }

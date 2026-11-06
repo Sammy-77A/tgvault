@@ -61,7 +61,8 @@ function mbBuild() {
     if (MB.stack.length > 1) { mbBack(); return true; }
     return prev ? prev() : false;
   };
-  window.tgvaultRefresh = () => { mbRefreshCurrent(); };
+  window.tgvaultRefresh = () => { mbRefreshCurrent(); mbPollDownloads(true); };
+  window.mbOpen = (where) => { if (where === "downloads" || where === "library" || where === "home") mbTab(where); };
   window.addEventListener("scroll", () => document.querySelector(".mb-top").classList.toggle("solid", window.scrollY > 120), { passive: true });
 }
 
@@ -73,21 +74,32 @@ function mbShow() {
   $("mb").hidden = false;
   if (!MB.loaded) {
     MB.loaded = true;
-    mbTab("home");
+    // Offline, open on what's downloaded: it never waits for Telegram.
+    mbTab(navigator.onLine === false ? "downloads" : "home");
+    window.addEventListener("online", () => { mbRefreshCurrent(); });
+    window.addEventListener("offline", () => mbOnState());
   }
   mbOnState();
 }
 
+// Each tab keeps its own stack of screens and where each was scrolled to, so
+// going to another tab and back lands exactly where you were.
 function mbTab(name) {
+  const top = MB.stack[MB.stack.length - 1];
+  if (top) top.scroll = window.scrollY;
+  MB.tabStacks = MB.tabStacks || {};
+  if (MB.stack.length) MB.tabStacks[MB.tab] = MB.stack;
+  const same = name === MB.tab;
   MB.tab = name;
-  MB.stack = [{ name, params: {} }];
+  const kept = !same && MB.tabStacks[name];
+  MB.stack = kept || [{ name, params: {} }];
   for (const b of document.querySelectorAll(".mb-tabs button")) b.classList.toggle("active", b.dataset.mb === name);
-  mbRender();
+  mbRender(!!kept);
 }
 
 function mbGo(name, params = {}) {
   const cur = MB.stack[MB.stack.length - 1];
-  if (cur) cur.scroll = $("mbBody").scrollTop || window.scrollY;
+  if (cur) cur.scroll = window.scrollY;
   MB.stack.push({ name, params });
   mbRender();
 }
@@ -101,6 +113,19 @@ function mbRefreshCurrent() {
   if (!$("mb").hidden) mbRender(true);
 }
 
+// Grey placeholder shapes shown while a screen's data arrives, instead of a blank wait.
+function skeleton(name) {
+  const card = () => el("div", { class: "mb-sk-card" }, el("div", { class: "mb-sk mb-sk-poster" }), el("div", { class: "mb-sk mb-sk-line" }), el("div", { class: "mb-sk mb-sk-line short" }));
+  if (name === "details") {
+    return el("div", { class: "mb-skeleton" }, el("div", { class: "mb-sk mb-sk-hero" }), el("div", { class: "mb-sk mb-sk-line wide" }), el("div", { class: "mb-sk mb-sk-line" }), el("div", { class: "mb-sk mb-sk-line" }), el("div", { class: "mb-sk mb-sk-line short" }));
+  }
+  if (name === "home") {
+    return el("div", { class: "mb-skeleton" }, el("div", { class: "mb-sk mb-sk-hero" }),
+      el("div", { class: "mb-sk-row" }, [1, 2, 3, 4].map(card)), el("div", { class: "mb-sk-row" }, [1, 2, 3, 4].map(card)));
+  }
+  return el("div", { class: "mb-skeleton" }, el("div", { class: "mb-sk-grid" }, [1, 2, 3, 4, 5, 6].map(card)));
+}
+
 const screens = {};
 
 async function mbRender(restore = false) {
@@ -110,14 +135,24 @@ async function mbRender(restore = false) {
   $("mbBackBtn").hidden = MB.stack.length < 2;
   $("mbTitle").hidden = MB.stack.length >= 2 && view.name === "details";
   document.querySelector(".mb-top").classList.toggle("over", view.name === "details");
-  if (!restore) host.replaceChildren(el("div", { class: "mb-loading" }, "Loading…"));
+  // What was shown last time appears at once; fresh data replaces it when it arrives.
+  if (view.node) {
+    host.replaceChildren(view.node);
+    if (view.scroll) window.scrollTo(0, view.scroll);
+  } else {
+    host.replaceChildren(skeleton(view.name));
+    window.scrollTo(0, 0);
+  }
   try {
     const node = await screens[view.name](view.params);
     if (seq !== MB.seq) return; // another screen was opened meanwhile
+    const y = window.scrollY;
+    view.node = node;
     host.replaceChildren(node);
-    if (restore && view.scroll) window.scrollTo(0, view.scroll); else if (!restore) window.scrollTo(0, 0);
+    window.scrollTo(0, view.node && (restore || y) ? (restore ? (view.scroll || y) : y) : 0);
   } catch (e) {
     if (seq !== MB.seq) return;
+    if (view.node) return; // keep showing what we had; the status chip says we are offline
     host.replaceChildren(el("div", { class: "mb-error" }, el("p", {}, e.message || String(e)),
       el("button", { type: "button", onclick: () => mbRender() }, "Try again")));
   }
@@ -130,9 +165,10 @@ function pill(text, kind) { return el("span", { class: `mb-pill ${kind || ""}` }
 function itemCard(it, onOpen) {
   const open = onOpen || (() => mbGo("details", { kind: it.kind, id: it.id }));
   const mark = it.inLibrary ? pill("In library", "ok")
-    : it.request === "requested" ? pill("Requested", "wait")
+    : it.request === "queued" ? pill("Will send", "wait") : it.request === "requested" ? pill("Requested", "wait")
     : it.request === "declined" ? pill("Not available", "bad") : null;
-  return el("button", { type: "button", class: "mb-card", onclick: open, "aria-label": it.title },
+  return el("button", { type: "button", class: "mb-card", onclick: open, "aria-label": it.title,
+    onpointerdown: () => { if (it.id && !it.prefetched) { it.prefetched = true; api(`/api/mb/title?kind=${it.kind}&id=${it.id}`).catch(() => {}); } } },
     el("div", { class: "mb-poster" }, mbImg(it.poster, "w342", it.title),
       it.rating ? el("span", { class: "mb-rating" }, icon("star"), it.rating.toFixed(1)) : null,
       mark),
@@ -191,7 +227,7 @@ screens.home = async () => {
 };
 
 function heroCard(it) {
-  const mark = it.inLibrary ? pill("In library", "ok") : it.request === "requested" ? pill("Requested", "wait") : null;
+  const mark = it.inLibrary ? pill("In library", "ok") : it.request === "queued" ? pill("Will send", "wait") : it.request === "requested" ? pill("Requested", "wait") : null;
   return el("div", { class: "mb-hero" },
     el("img", { class: "mb-hero-img", alt: "", src: `/api/mb/img?p=${encodeURIComponent(it.backdrop)}&s=w780` }),
     el("div", { class: "mb-hero-shade" }),
@@ -298,8 +334,9 @@ screens.details = async ({ kind, id, offline }) => {
   const actions = el("div", { class: "mb-actions" });
   const reqBtn = () => {
     const st = reqState(it);
-    if (isShow) return el("button", { type: "button", class: "mb-secondary", onclick: () => requestDialog(d) }, icon("clock"), st === "requested" ? "Request more" : "Request seasons");
+    if (isShow) return el("button", { type: "button", class: "mb-secondary", onclick: () => requestDialog(d) }, icon("clock"), (st === "requested" || st === "queued") ? "Request more" : "Request seasons");
     if (lib && files.length) return null;
+    if (st === "queued") return el("button", { type: "button", class: "mb-secondary", disabled: true }, icon("clock"), "Will send when online");
     if (st === "requested") return el("button", { type: "button", class: "mb-secondary", disabled: true }, icon("check"), "Requested; waiting");
     return el("button", { type: "button", class: "mb-primary", onclick: () => requestDialog(d) }, icon("clock"), st === "declined" ? "Ask again" : "Request");
   };
@@ -308,6 +345,8 @@ screens.details = async ({ kind, id, offline }) => {
     if (f.local) {
       actions.append(el("button", { type: "button", class: "mb-primary", onclick: () => playFiles([f.path], f.path, d) }, icon("play"), f.pos ? "Resume" : "Play"),
         el("button", { type: "button", class: "mb-secondary", onclick: () => removeFiles([f.path], it.title) }, icon("trash"), "Remove from phone"));
+    } else if (dlFor(f.path)) {
+      actions.append(dlBlock(dlFor(f.path)));
     } else {
       actions.append(el("button", { type: "button", class: "mb-primary", onclick: () => downloadFiles([f.path], it.title) }, icon("down"), "Download", f.size ? ` · ${bytes(f.size)}` : ""));
     }
@@ -321,7 +360,8 @@ screens.details = async ({ kind, id, offline }) => {
   if (d.trailers && d.trailers.length) actions.append(el("button", { type: "button", class: "mb-secondary", onclick: () => showTrailer(d.trailers[0], trailerBox) }, icon("play"), "Trailer"));
   const trailerBox = el("div", { class: "mb-trailer", hidden: true });
 
-  const state = reqState(it) === "requested" ? el("p", { class: "mb-note" }, icon("clock"), "You've asked for this; you'll see it here when it's ready.")
+  const state = reqState(it) === "queued" ? el("p", { class: "mb-note" }, icon("clock"), "You're offline. The request is saved and goes out as soon as you're back online.")
+    : reqState(it) === "requested" ? el("p", { class: "mb-note" }, icon("clock"), "You've asked for this; you'll see it here when it's ready.")
     : reqState(it) === "declined" ? el("p", { class: "mb-note bad" }, "It wasn't added last time. You can ask again.") : null;
 
   const body = [head, el("div", { class: "mb-d-body" }, actions, state, trailerBox,
@@ -407,12 +447,14 @@ function episodeRow(d, e, playable) {
   let action;
   if (!f) action = el("span", { class: "mb-ep-none" }, "Not in library");
   else if (f.local) action = el("button", { type: "button", class: "mb-round", "aria-label": "Play", onclick: () => playFiles(playable, f.path, d) }, icon("play"));
+  else if (dlFor(f.path)) action = el("span", { class: "mb-ep-dl", "data-dltext": f.path }, pctOf(dlFor(f.path)) + "%");
   else action = el("button", { type: "button", class: "mb-round ghost", "aria-label": "Download", onclick: () => downloadFiles([f.path], `${d.item.title} episode ${e.number}`) }, icon("down"));
   return el("div", { class: "mb-ep" + (f ? "" : " off") },
     el("div", { class: "mb-ep-n" }, e.number),
     el("div", { class: "mb-ep-main" },
       el("div", { class: "mb-ep-name" }, e.name || `Episode ${e.number}`),
       el("div", { class: "mb-card-sub" }, e.runtime ? mins(e.runtime) : "", f && !f.local ? ` · ${bytes(f.size)}` : "", f && f.local ? " · on this phone" : ""),
+      f && dlFor(f.path) ? dlBlock(dlFor(f.path)) : null,
       pct ? el("div", { class: "mb-progress" }, el("span", { style: `width:${pct}%` })) : null),
     action);
 }
@@ -426,9 +468,9 @@ async function requestDialog(d) {
       title: `Request ${it.title}?`,
       body: el("p", {}, "The owner gets a notice, adds it to the library, and it will show up under Downloads when it's ready."),
       buttons: [{ label: "Not now", value: null }, { label: "Request", value: "go", primary: true }],
-      run: async () => { await api("/api/mb/request", { kind: "movie", tmdb: it.id, title: it.title, year: it.year || 0, poster: it.poster || "" }); },
+      run: async () => { MB.lastReq = await api("/api/mb/request", { kind: "movie", tmdb: it.id, title: it.title, year: it.year || 0, poster: it.poster || "" }); },
     });
-    if (ok) { toast("Requested. You'll see it under Downloads."); mbRender(true); }
+    if (ok) { toast(requestedToast()); mbRender(true); }
     return;
   }
   const have = new Map((d.seasons || []).map((s) => [s.number, s]));
@@ -470,20 +512,52 @@ async function requestDialog(d) {
       if (!seasons.length && !Object.keys(episodes).length) throw new Error("Choose at least one season or episode.");
       const payload = { kind: "show", tmdb: it.id, title: it.title, year: it.year || 0, poster: it.poster || "", seasons };
       if (Object.keys(episodes).length) payload.episodes = episodes;
-      await api("/api/mb/request", payload);
+      MB.lastReq = await api("/api/mb/request", payload);
     },
   });
-  if (ok) { toast("Requested. You'll see it under Downloads."); mbRender(true); }
+  if (ok) { toast(requestedToast()); mbRender(true); }
 }
+
+const requestedToast = () => (MB.lastReq && MB.lastReq.request && MB.lastReq.request.state === "queued")
+  ? "You're offline: saved, and it will be sent when you're back online."
+  : "Requested. You'll see it under Downloads.";
 
 // ---------- downloading, removing, playing ----------
 
 async function downloadFiles(paths, label) {
   try {
-    await api("/api/mb/download", { paths });
-    toast(`Downloading ${label}…`);
-    if (typeof refresh === "function") refresh();
+    const r = await api("/api/mb/download", { paths });
+    toast(`Downloading ${label}… ${r.queued > 1 ? r.queued + " files" : ""}`.trim());
+    location.href = "tgvault://dlservice"; // keeps the download going with the app closed
+    await mbPollDownloads(true);
+    mbRefreshCurrent();
   } catch (e) { toast(e.message); }
+}
+
+const dlControl = (action, path) => api("/api/mb/download-action", { action, path }).then(() => mbPollDownloads(true)).then(() => mbRefreshCurrent()).catch((e) => toast(e.message));
+
+// the queue entry for a file, if it has one that isn't finished
+const dlFor = (path) => (MB.dl && MB.dl.items.find((i) => i.path === path && i.state !== "done")) || null;
+
+const fmtEta = (sec) => !sec ? "" : sec < 60 ? `${sec}s left` : sec < 3600 ? `${Math.round(sec / 60)} min left` : `${Math.floor(sec / 3600)}h ${Math.round((sec % 3600) / 60)}m left`;
+const pctOf = (it) => (it.size ? Math.min(100, Math.floor((it.done / it.size) * 100)) : 0);
+
+function dlDetail(it) {
+  if (it.state === "failed") return it.error || "Failed";
+  if (it.state === "paused") return `Paused · ${pctOf(it)}%`;
+  if (it.state === "queued") return it.waiting || (it.error ? `Retrying… (${it.error})` : "Waiting in line");
+  return [`${pctOf(it)}%`, it.speed > 1 ? `${bytes(it.speed)}/s` : "", fmtEta(it.eta), `${bytes(it.done)} of ${bytes(it.size)}`].filter(Boolean).join(" · ");
+}
+
+// A progress block for one queued download: bar, numbers and the buttons that fit its state.
+function dlBlock(it) {
+  const bar = el("div", { class: "mb-progress thick" + (it.state === "failed" ? " bad" : "") }, el("span", { style: `width:${pctOf(it)}%`, "data-dlbar": it.path }));
+  const btns = el("div", { class: "mb-dl-btns" },
+    (it.state === "running" || it.state === "queued") ? el("button", { type: "button", class: "mb-link", onclick: () => dlControl("pause", it.path) }, "Pause") : null,
+    it.state === "paused" ? el("button", { type: "button", class: "mb-link", onclick: () => dlControl("resume", it.path) }, "Resume") : null,
+    it.state === "failed" ? el("button", { type: "button", class: "mb-link", onclick: () => dlControl("retry", it.path) }, "Retry") : null,
+    el("button", { type: "button", class: "mb-link bad", onclick: () => dlControl("cancel", it.path) }, "Cancel"));
+  return el("div", { class: "mb-dl" }, el("div", { class: "mb-dl-text", "data-dltext": it.path }, dlDetail(it)), bar, btns);
 }
 
 async function removeFiles(paths, label) {
@@ -527,13 +601,13 @@ screens.downloads = async () => {
 
   // requests
   const mine = rq.requests.filter((r) => r.title).slice(0, 12);
-  const answered = rq.requests.some((r) => r.state !== "requested");
+  const answered = rq.requests.some((r) => r.state !== "requested" && r.state !== "queued");
   const reqs = mine.length ? el("section", { class: "mb-reqs" }, el("div", { class: "mb-row-head" }, el("h2", {}, "Requests"),
     answered ? el("button", { type: "button", class: "mb-link mb-clear", onclick: () => api("/api/mb/requests/clear", {}).then(() => mbRender(true)).catch((e) => toast(e.message)) }, "Clear answered") : null),
     mine.map((r) => {
       const status = r.state === "declined" ? pill("Not available", "bad")
         : r.available ? pill("Ready to download", "ok")
-        : r.state === "fulfilled" ? pill("Being added…", "info") : pill("Requested", "wait");
+        : r.state === "fulfilled" ? pill("Being added…", "info") : r.state === "queued" ? pill("Waiting to send (offline)", "wait") : pill("Requested", "wait");
       const what = r.kind === "movie" ? "Movie" : !r.seasons || !r.seasons.length ? (r.episodes ? "Chosen episodes" : "All seasons") : r.seasons.length === 1 ? `Season ${r.seasons[0]}` : `Seasons ${r.seasons.join(", ")}`;
       const lt = titles.find((t) => t.kind === (r.kind === "movie" ? "movie" : "show") && t.norm === norm(r.title) && (!t.year || !r.year || Math.abs(t.year - r.year) <= 1));
       return el("button", { type: "button", class: "mb-req", onclick: () => mbGo("details", { kind: r.kind === "movie" ? "movie" : "show", id: r.tmdb, lib: lt || undefined }) },
@@ -547,7 +621,12 @@ screens.downloads = async () => {
   const empty = !onPhone.length && !started.length && !mine.length ? el("div", { class: "mb-empty" }, icon("film"), el("p", {}, "Nothing on this phone yet."),
     el("p", { class: "mb-hint" }, "Everything the owner has added is in the Library tab. Download something there and it shows up here, ready to watch offline."),
     el("button", { type: "button", class: "mb-primary", onclick: () => mbTab("library") }, "Open the library")) : null;
-  return el("div", { class: "mb-downloads" }, cont, reqs,
+  const queue = (MB.dl ? MB.dl.items : []).filter((i) => i.state !== "done");
+  const queueSection = queue.length ? el("section", { class: "mb-queue" },
+    el("div", { class: "mb-row-head" }, el("h2", {}, "Downloading"),
+      queue.some((i) => i.state === "failed") ? el("button", { type: "button", class: "mb-link", onclick: () => dlControl("clear", "") }, "Clear failed") : null),
+    queue.map((it) => el("div", { class: "mb-queue-item" }, el("strong", {}, it.title), dlBlock(it)))) : null;
+  return el("div", { class: "mb-downloads" }, queueSection, cont, reqs,
     movies.length ? el("section", {}, el("h2", {}, "Movies on this phone"), el("div", { class: "mb-grid" }, movies.map(libCard))) : null,
     shows.length ? el("section", {}, el("h2", {}, "TV shows on this phone"), el("div", { class: "mb-grid" }, shows.map(libCard))) : null,
     onPhone.length ? el("p", { class: "mb-hint mb-more-hint" }, "Looking for something else? ", el("button", { type: "button", class: "mb-link", onclick: () => mbTab("library") }, "Open the library")) : null,
@@ -631,30 +710,71 @@ async function mbInfo(fresh) {
   return MB.info;
 }
 
-// ---------- download progress, from the state that app.js polls ----------
+// ---------- download progress ----------
+
+// Asks the Go side for the queue and updates what's on screen: the bar at the
+// top, the bars and numbers on the page, and, when something finishes or
+// fails, a message and a fresh page.
+async function mbPollDownloads(force) {
+  if (MB.polling && !force) return;
+  MB.polling = true;
+  try {
+    const r = await api("/api/mb/downloads");
+    const before = new Map((MB.dl ? MB.dl.items : []).map((i) => [i.path, i.state]));
+    MB.dl = r;
+    let changed = false;
+    for (const it of r.items) {
+      const was = before.get(it.path);
+      if (was && was !== it.state) {
+        changed = true;
+        if (it.state === "done") toast(`Downloaded: ${it.title}`);
+        if (it.state === "failed") toast(`Download failed: ${it.title}. ${it.error || ""}`.trim(), { label: "Retry", fn: () => dlControl("retry", it.path) });
+      }
+      if (!was && it.state !== "done") changed = true;
+    }
+    for (const [path] of before) if (!r.items.find((i) => i.path === path)) changed = true;
+    mbPaintBanner();
+    mbPaintProgress();
+    if (changed && !$("dlg").open) mbRefreshCurrent();
+  } catch { /* the page is closing, or the app is starting */ }
+  MB.polling = false;
+  clearTimeout(MB.pollTimer);
+  MB.pollTimer = setTimeout(() => mbPollDownloads(), MB.dl && MB.dl.active ? 1200 : 6000);
+}
+
+function mbPaintBanner() {
+  const banner = $("mbBanner");
+  const live = (MB.dl ? MB.dl.items : []).filter((i) => i.state === "running" || i.state === "queued" || i.state === "paused");
+  if (!live.length) { banner.hidden = true; return; }
+  const running = live.filter((i) => i.state === "running");
+  const lead = running[0] || live[0];
+  const done = live.reduce((n, i) => n + i.done, 0), size = live.reduce((n, i) => n + i.size, 0);
+  const speed = running.reduce((n, i) => n + (i.speed || 0), 0);
+  const pct = size ? Math.floor((done / size) * 100) : 0;
+  const allPaused = live.every((i) => i.state === "paused");
+  const eta = speed > 1 ? fmtEta(Math.round((size - done) / speed)) : "";
+  banner.hidden = false;
+  banner.replaceChildren(
+    el("button", { type: "button", class: "mb-banner-main", onclick: () => mbTab("downloads") },
+      el("strong", {}, allPaused ? "Paused" : `Downloading${live.length > 1 ? ` ${live.length} files` : ""}`), " ",
+      lead.title, ` · ${pct}%`, speed > 1 ? ` · ${bytes(speed)}/s` : "", eta ? ` · ${eta}` : "", (MB.dl && MB.dl.online === false) ? " · waiting for a connection" : ""),
+    el("button", { type: "button", class: "mb-banner-btn", onclick: () => dlControl(allPaused ? "resume" : "pause", "") }, allPaused ? "Resume" : "Pause"));
+}
+
+// Moves the bars and numbers already on the page without rebuilding it.
+function mbPaintProgress() {
+  for (const it of (MB.dl ? MB.dl.items : [])) {
+    for (const bar of document.querySelectorAll(`[data-dlbar="${CSS.escape(it.path)}"]`)) bar.style.width = pctOf(it) + "%";
+    for (const t of document.querySelectorAll(`[data-dltext="${CSS.escape(it.path)}"]`)) t.textContent = t.classList.contains("mb-ep-dl") ? pctOf(it) + "%" : dlDetail(it);
+  }
+}
 
 function mbOnState() {
   if (!state || !state.engine) return;
-  const tasks = (state.engine.tasks || []).filter((t) => t.kind === "restore");
-  const running = tasks.filter((t) => !t.finished);
-  const banner = $("mbBanner");
-  if (running.length) {
-    const t = running[0];
-    banner.hidden = false;
-    banner.textContent = `Downloading${t.total > 1 ? ` ${Math.min(t.done + 1, t.total)} of ${t.total}` : ""}: ${(t.current || t.title || "").split("/").pop()}`;
-  } else {
-    banner.hidden = true;
-  }
-  const now = new Set(running.map((t) => t.id));
-  const before = MB.running || new Set();
-  let finished = false;
-  for (const t of tasks) {
-    if (t.finished && before.has(t.id)) {
-      finished = true;
-      toast((t.errors || []).length ? `Download problem: ${t.errors[0]}` : "Download finished.");
-      api(`/api/tasks/${t.id}/dismiss`, {}).catch(() => {});
-    }
-  }
-  MB.running = now;
-  if (finished) mbRefreshCurrent();
+  const chip = $("mbStatus");
+  const tgst = (state.telegram || {}).status;
+  const offline = navigator.onLine === false || tgst !== "ready" || state.telegram.online === false;
+  chip.hidden = !offline;
+  chip.textContent = navigator.onLine === false ? "Offline" : "Reconnecting…";
+  if (!MB.pollStarted) { MB.pollStarted = true; mbPollDownloads(); }
 }

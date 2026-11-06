@@ -30,6 +30,8 @@ class MainActivity : Activity() {
     private lateinit var web: WebView
     private lateinit var swipe: SwipeRefreshLayout
     private var started = false
+    private var pageReady = false
+    private var pendingOpen: String? = null // a notification asked for this page
     private var fullScreen: View? = null // a video playing full screen
     private var fullScreenDone: WebChromeClient.CustomViewCallback? = null
     private lateinit var chrome: WebChromeClient
@@ -52,6 +54,11 @@ class MainActivity : Activity() {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             webViewClient = object : WebViewClient() {
+                override fun onPageFinished(view: WebView, url: String) {
+                    pageReady = true
+                    openPending()
+                }
+
                 override fun shouldOverrideUrlLoading(view: WebView, req: WebResourceRequest): Boolean {
                     val url = req.url
                     if (url.host == "127.0.0.1") return false // tgvault's own page
@@ -118,6 +125,15 @@ class MainActivity : Activity() {
             }
         }
         setContentView(swipe)
+        pendingOpen = intent.getStringExtra("open")
+        // The movie app tells you when a download ends or a request is ready, so it asks once.
+        if (Core.library && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val prefs = getSharedPreferences("perms", MODE_PRIVATE)
+            if (!prefs.getBoolean("asked-notifications", false) && !Core.hasNotifications(this)) {
+                prefs.edit().putBoolean("asked-notifications", true).apply()
+                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 2)
+            }
+        }
         thread(name = "tgvault-start") {
             try {
                 val url = Core.start(this)
@@ -137,6 +153,20 @@ class MainActivity : Activity() {
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        pendingOpen = intent.getStringExtra("open")
+        openPending()
+    }
+
+    private fun openPending() {
+        val where = pendingOpen ?: return
+        if (!pageReady) return
+        pendingOpen = null
+        web.evaluateJavascript("window.mbOpen && window.mbOpen('$where')", null)
     }
 
     override fun onResume() {
@@ -211,6 +241,7 @@ class MainActivity : Activity() {
             "play" -> url.getQueryParameter("u")?.let {
                 startActivity(Intent(this, PlayerActivity::class.java).putExtra("url", it))
             }
+            "dlservice" -> DownloadService.start(this)
             // The movie app's player: the link is a playlist served by the Go side.
             "mbplay" -> url.getQueryParameter("u")?.let {
                 startActivity(Intent(this, PlayerActivity::class.java).putExtra("plist", it))

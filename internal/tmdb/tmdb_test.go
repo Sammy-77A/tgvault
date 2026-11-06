@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func fake(t *testing.T) (*Client, *[]string) {
@@ -72,6 +73,43 @@ func TestNoKeyAndBadKey(t *testing.T) {
 	}
 	c.Key = "x"
 	if _, err := c.Seasons(context.Background(), 1); err == nil { // the fake answers 404
+		t.Fatal("want an error")
+	}
+}
+
+func TestRawIsCachedOnDiskAndServedStaleWhileRefreshing(t *testing.T) {
+	dir := t.TempDir()
+	SetCacheDir(dir)
+	t.Cleanup(func() { SetCacheDir(""); cacheMu.Lock(); cache = map[string]cacheEntry{}; cacheMu.Unlock() })
+	hits := 0
+	body := `{"v":1}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.Write([]byte(body))
+	}))
+	c := &Client{Key: "k", Base: srv.URL}
+	ctx := context.Background()
+	got, err := c.Raw(ctx, "/x", nil, time.Hour)
+	if err != nil || string(got) != `{"v":1}` || hits != 1 {
+		t.Fatalf("first: %v %s %d", err, got, hits)
+	}
+	if got, _ = c.Raw(ctx, "/x", nil, time.Hour); hits != 1 {
+		t.Fatalf("a fresh answer isn't fetched again: %d", hits)
+	}
+	// a restart: memory is empty, the disk copy answers, even with no connection
+	cacheMu.Lock()
+	cache = map[string]cacheEntry{}
+	cacheMu.Unlock()
+	srv.Close()
+	if got, err = c.Raw(ctx, "/x", nil, time.Hour); err != nil || string(got) != `{"v":1}` {
+		t.Fatalf("offline after a restart: %v %s", err, got)
+	}
+	// stale but present: returned at once, and nothing breaks when the refresh fails
+	if got, err = c.Raw(ctx, "/x", nil, 0); err != nil || string(got) != `{"v":1}` {
+		t.Fatalf("stale: %v %s", err, got)
+	}
+	// never seen and offline: an error, not an empty page
+	if _, err = c.Raw(ctx, "/never", nil, time.Hour); err == nil {
 		t.Fatal("want an error")
 	}
 }

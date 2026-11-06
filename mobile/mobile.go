@@ -151,6 +151,22 @@ func RunBackup(timeoutSeconds int) bool {
 	return done
 }
 
+// DownloadStatus is the movie app's download queue as JSON: whether anything
+// is active, and a title, bytes done, total and speed for the notification.
+func DownloadStatus() string {
+	if a := current(); a != nil {
+		return a.DownloadStatus()
+	}
+	return `{"active":false}`
+}
+
+// DownloadAction is "pause", "resume" or "cancel-all", from the notification's buttons.
+func DownloadAction(action string) {
+	if a := current(); a != nil {
+		_ = a.DownloadAction(action)
+	}
+}
+
 // SetConditions passes whether the phone is on an unmetered network (Wi-Fi)
 // and whether it's charging.
 func SetConditions(unmetered, charging bool) {

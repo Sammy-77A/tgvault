@@ -36,7 +36,11 @@ func transient(err error) bool {
 		return true
 	}
 	if _, rpc := tgerr.As(err); rpc {
-		return tgerr.IsCode(err, 500) // Telegram's own hiccups (RPC_CALL_FAIL, INTERDC_..._CALL_ERROR)
+		// Telegram's own hiccups: 500 (RPC_CALL_FAIL, INTERDC_..._CALL_ERROR),
+		// 502/504 (gateway) and 503 ("Timeout" while it fetches the data, which
+		// it answers when a data centre is busy or a file is slow to load).
+		// The wait before the next try is what makes them work.
+		return tgerr.IsCode(err, 500, 502, 503, 504) || tgerr.Is(err, "TIMEOUT", "RPC_CALL_FAIL", "RPC_MCGET_FAIL", "WORKER_BUSY_TOO_LONG_RETRY")
 	}
 	return true // the connection itself, or a request that timed out
 }
@@ -73,6 +77,16 @@ func (c *Client) retry(ctx context.Context, what string, do func() error) error 
 
 // Download writes a stored file to w.
 func (c *Client) Download(ctx context.Context, msgID int, w io.Writer) error {
+	return c.DownloadFrom(ctx, msgID, 0, w)
+}
+
+// DownloadFrom writes a stored file to w starting at byte offset, which must
+// be a multiple of BlockSize: a download that was interrupted carries on from
+// the last whole block it had instead of from the start.
+func (c *Client) DownloadFrom(ctx context.Context, msgID int, offset int64, w io.Writer) error {
+	if offset%BlockSize != 0 {
+		return fmt.Errorf("download offset %d isn't on a block boundary", offset)
+	}
 	var fl fileLoc
 	if err := c.retry(ctx, "looking up the file", func() (err error) {
 		fl, err = c.fileLoc(ctx, msgID, false)
@@ -81,6 +95,10 @@ func (c *Client) Download(ctx context.Context, msgID int, w io.Writer) error {
 		return err
 	}
 	blocks := (fl.size + BlockSize - 1) / BlockSize
+	first := offset / BlockSize
+	if first > blocks {
+		return fmt.Errorf("download offset %d is past the end of the file", offset)
+	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -91,7 +109,7 @@ func (c *Client) Download(ctx context.Context, msgID int, w io.Writer) error {
 	ahead := make(chan chan result, downloadWindow)
 	go func() {
 		defer close(ahead)
-		for n := int64(0); n < blocks; n++ {
+		for n := first; n < blocks; n++ {
 			ch := make(chan result, 1)
 			select {
 			case ahead <- ch:

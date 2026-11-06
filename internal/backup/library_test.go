@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Sammy-77A/tgvault/internal/media"
 	"github.com/Sammy-77A/tgvault/internal/store"
@@ -258,10 +259,10 @@ func TestLibraryListsTitlesAndDownloadsForOffline(t *testing.T) {
 		t.Fatal("nothing is downloaded yet")
 	}
 
-	if _, err := e.DownloadMedia(context.Background(), []string{seed.Folder}); err != nil {
+	if _, err := e.QueueDownloads(context.Background(), []string{seed.Folder}); err != nil {
 		t.Fatal(err)
 	}
-	waitTasks(t, e)
+	waitDownloads(t, e)
 	video := e.MediaLocal(seed.Files[0].Path)
 	if !exists(video) || !exists(e.MediaLocal(seed.Files[0].Subs[0].Path)) {
 		t.Fatalf("the video and its subtitle should be on the phone: %s", video)
@@ -275,13 +276,13 @@ func TestLibraryListsTitlesAndDownloadsForOffline(t *testing.T) {
 			t.Errorf("downloaded files should be marked local: %+v", tl.Files[0])
 		}
 	}
-	if _, err := e.DownloadMedia(context.Background(), []string{seed.Folder}); err == nil {
+	if _, err := e.QueueDownloads(context.Background(), []string{seed.Folder}); err == nil {
 		t.Error("downloading what's already there should say so")
 	}
 	if n, err := e.RemoveMedia([]string{seed.Folder}); err != nil || n != 1 || exists(video) {
 		t.Fatalf("remove: n=%d err=%v still=%v", n, err, exists(video))
 	}
-	if _, err := e.DownloadMedia(context.Background(), []string{"R/elsewhere/file.mkv"}); err == nil {
+	if _, err := e.QueueDownloads(context.Background(), []string{"R/elsewhere/file.mkv"}); err == nil {
 		t.Error("only the library can be downloaded this way")
 	}
 }
@@ -314,10 +315,10 @@ func TestDiskUsageCountsDownloads(t *testing.T) {
 	lib, _ := e.Library()
 	for _, tl := range lib {
 		if tl.Title == "Up" {
-			e.DownloadMedia(context.Background(), []string{tl.Folder})
+			e.QueueDownloads(context.Background(), []string{tl.Folder})
 		}
 	}
-	waitTasks(t, e)
+	waitDownloads(t, e)
 	if e.MediaDiskUsage() <= 0 {
 		t.Error("a downloaded video should count")
 	}
@@ -452,4 +453,145 @@ func TestFilesPutInPlaceByHandStillShowUp(t *testing.T) {
 	if d.Kind != "show" || len(d.Seasons) != 2 || d.Seasons[0].Number != 1 || d.Seasons[1].Number != 2 {
 		t.Errorf("Dexter should have seasons 1 and 2: %+v", d)
 	}
+}
+
+func autoRig(t *testing.T) (*Engine, *store.Store, store.Root, string, *[][]string) {
+	e, st, _, root, dir := moveRig(t)
+	st.Set(SettingMediaRoot, "R/tgmoviebox")
+	e.SetMovieDB(&fakeDB{})
+	var told [][]string
+	e.SetSortHook(func(p []string) { told = append(told, p) })
+	return e, st, root, filepath.Join(dir, "tgmoviebox"), &told
+}
+
+func TestNewFilesAreSortedByThemselvesAndQuietly(t *testing.T) {
+	old := stableAfter
+	stableAfter = 0
+	defer func() { stableAfter = old }()
+	e, st, root, lib, told := autoRig(t)
+	write(t, filepath.Join(lib, "Up.2009.1080p.BluRay.x264.mkv"), "up")
+	write(t, filepath.Join(lib, "Marvels_Jessica_Jones_S03E03_720p.mkv"), "jj")
+	syncAll(t, e, st, root)
+	e.AutoSortOnce(context.Background())
+	waitTasks(t, e)
+	if !exists(filepath.Join(lib, "Movies", "Up (2009)", "Up (2009).mkv")) || !exists(filepath.Join(lib, "Shows", "Marvel's Jessica Jones", "Season 03", "Marvel's Jessica Jones - S03E03.mkv")) {
+		t.Fatal("both should be filed without anyone asking")
+	}
+	if len(*told) != 0 {
+		t.Errorf("a successful sort is silent: %v", *told)
+	}
+	log := e.SortLog(10)
+	if len(log) != 2 || log[0].Kind != "sorted" {
+		t.Errorf("but it is in the log: %+v", log)
+	}
+}
+
+func TestAFileStillArrivingIsLeftAlone(t *testing.T) {
+	old := stableAfter
+	stableAfter = time.Hour // the file was only just written
+	defer func() { stableAfter = old }()
+	e, st, root, lib, _ := autoRig(t)
+	write(t, filepath.Join(lib, "Up.2009.1080p.BluRay.x264.mkv"), "up")
+	syncAll(t, e, st, root)
+	e.AutoSortOnce(context.Background())
+	waitTasks(t, e)
+	if !exists(filepath.Join(lib, "Up.2009.1080p.BluRay.x264.mkv")) {
+		t.Error("a file that may still be syncing or being copied must not be moved yet")
+	}
+}
+
+func TestOnlyProblemsReachTheOwnerAndOnlyOnce(t *testing.T) {
+	old := stableAfter
+	stableAfter = 0
+	defer func() { stableAfter = old }()
+	e, st, root, lib, told := autoRig(t)
+	write(t, filepath.Join(lib, "Up.2009.1080p.mkv"), "up")
+	write(t, filepath.Join(lib, "Shameless.S01E01.720p.mkv"), "s") // two shows by that name: needs a decision
+	write(t, filepath.Join(lib, "holiday clip.mp4"), "h")          // nothing like it on TMDB
+	syncAll(t, e, st, root)
+	e.AutoSortOnce(context.Background())
+	waitTasks(t, e)
+	if len(*told) != 1 || len((*told)[0]) != 2 {
+		t.Fatalf("one message about the two files that need the owner: %v", *told)
+	}
+	e.AutoSortOnce(context.Background())
+	waitTasks(t, e)
+	if len(*told) != 1 {
+		t.Errorf("the same problem is not announced again: %v", *told)
+	}
+	if !exists(filepath.Join(lib, "Movies", "Up (2009)", "Up (2009).mkv")) {
+		t.Error("the good file was sorted regardless")
+	}
+}
+
+func TestAMovieRequestIsAnsweredWhenItsFileIsFiled(t *testing.T) {
+	old := stableAfter
+	stableAfter = 0
+	defer func() { stableAfter = old }()
+	e, st, root, lib, _ := autoRig(t)
+	phoneSt, _ := store.Open(filepath.Join(t.TempDir(), "p.db"))
+	t.Cleanup(func() { phoneSt.Close() })
+	tg := e.tg.(*fakeTG)
+	phone := NewWith(phoneSt, tg, t.TempDir())
+	phone.ReadOnly()
+	ctx := context.Background()
+	phone.MakeRequest(ctx, Request{Kind: "movie", TMDB: 14160, Title: "Up", Year: 2009})
+	phone.MakeRequest(ctx, Request{Kind: "movie", TMDB: 999, Title: "Never Arrives"})
+	e.SyncRequests(ctx)
+	write(t, filepath.Join(lib, "Up.2009.1080p.BluRay.x264.mkv"), "up")
+	syncAll(t, e, st, root)
+	e.AutoSortOnce(ctx)
+	waitTasks(t, e)
+	time.Sleep(300 * time.Millisecond)
+	states := map[string]string{}
+	for _, r := range e.Requests() {
+		states[r.Title] = r.State
+	}
+	if states["Up"] != "fulfilled" || states["Never Arrives"] != "requested" {
+		t.Errorf("only the request whose file arrived is answered: %v", states)
+	}
+	phone.SyncRequests(ctx)
+	if phone.Requests()[0].State == "" {
+		t.Error("the phone hears about it")
+	}
+}
+
+func TestASeasonRequestNeedsEveryEpisode(t *testing.T) {
+	old := stableAfter
+	stableAfter = 0
+	defer func() { stableAfter = old }()
+	e, st, root, lib, _ := autoRig(t)
+	ctx := context.Background()
+	phoneSt, _ := store.Open(filepath.Join(t.TempDir(), "p.db"))
+	t.Cleanup(func() { phoneSt.Close() })
+	phone := NewWith(phoneSt, e.tg, t.TempDir())
+	phone.ReadOnly()
+	phone.MakeRequest(ctx, Request{Kind: "show", TMDB: 61889, Title: "Marvel's Jessica Jones", Seasons: []int{3}})
+	e.SyncRequests(ctx)
+	// the fake TMDB lists 13 episodes in a season
+	for n := 1; n <= 12; n++ {
+		write(t, filepath.Join(lib, "Marvels_Jessica_Jones_S03E"+twoDigits(n)+"_720p.mkv"), "e")
+	}
+	syncAll(t, e, st, root)
+	e.AutoSortOnce(ctx)
+	waitTasks(t, e)
+	time.Sleep(200 * time.Millisecond)
+	if e.Requests()[0].State != "requested" {
+		t.Fatal("12 of 13 episodes is not the whole season")
+	}
+	write(t, filepath.Join(lib, "Marvels_Jessica_Jones_S03E13_720p.mkv"), "e")
+	syncAll(t, e, st, root)
+	e.AutoSortOnce(ctx)
+	waitTasks(t, e)
+	time.Sleep(300 * time.Millisecond)
+	if e.Requests()[0].State != "fulfilled" {
+		t.Errorf("with the thirteenth it is done: %+v", e.Requests()[0])
+	}
+}
+
+func twoDigits(n int) string {
+	if n < 10 {
+		return "0" + string(rune('0'+n))
+	}
+	return string(rune('0'+n/10)) + string(rune('0'+n%10))
 }

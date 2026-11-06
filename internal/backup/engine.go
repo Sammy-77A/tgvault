@@ -73,6 +73,9 @@ type Engine struct {
 	orgMu    sync.RWMutex
 	movieDB  MovieDB
 	dataDir  string
+	dl       dlState // the movie app's download queue
+	reqHook  func(state string, r Request)
+	sortHook func(problems []string)
 	readOnly bool // the library app: it may look, download and ask, never change the backup
 }
 
@@ -144,6 +147,8 @@ func (e *Engine) Run(ctx context.Context) error {
 	go e.heartbeat(ctx)
 	go e.scanLoop(ctx)
 	go e.reconcileLoop(ctx)
+	go e.autoSortLoop(ctx)
+	e.ResumeDownloads()
 	go e.syncLoop(ctx)
 	for i := 0; i < workers; i++ {
 		go e.workerLoop(ctx)

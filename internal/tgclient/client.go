@@ -51,6 +51,7 @@ const (
 // Setting keys.
 const (
 	keyAPIID       = "api_id"
+	keyAccount     = "tg_account" // who is logged in, remembered so the app can open without a connection
 	keyAPIHash     = "api_hash"
 	keyChannelID   = "channel_id"
 	keyChannelHash = "channel_hash"
@@ -113,7 +114,7 @@ type Client struct {
 
 // New creates a client. Call Run to connect.
 func New(st *store.Store, dataDir, version string) *Client {
-	return &Client{
+	c := &Client{
 		st:      st,
 		dataDir: dataDir,
 		version: version,
@@ -123,6 +124,16 @@ func New(st *store.Store, dataDir, version string) *Client {
 		restart: make(chan struct{}, 1),
 		device:  telegram.DeviceConfig{DeviceModel: "PC", SystemVersion: "Windows"},
 	}
+	// A device that was logged in opens as logged in, with or without a
+	// connection: what's stored on it must never wait for Telegram. The
+	// connection is made in the background and the page shows its state.
+	if st.Get(keyAPIID) != "" && st.Get(keyAPIHash) != "" {
+		c.status = StatusConnecting
+	}
+	if _, err := os.Stat(c.sessionPath()); err == nil {
+		c.account = st.Get(keyAccount)
+	}
+	return c
 }
 
 // SetDevice sets how this device is named in Telegram's list of active sessions.
@@ -331,7 +342,9 @@ func (c *Client) Run(ctx context.Context) {
 			}
 			c.mu.Lock()
 			c.loginNote = friendly(err)
+			c.account = ""
 			c.mu.Unlock()
+			_ = c.st.Delete(keyAccount)
 			continue
 		}
 		msg := "lost connection to Telegram; reconnecting"
@@ -424,6 +437,7 @@ func (c *Client) runOnce(ctx context.Context, id int, hash string) error {
 		c.mu.Lock()
 		c.channel = ch
 		c.account = name
+		_ = c.st.Set(keyAccount, name)
 		c.status, c.lastErr = StatusReady, ""
 		close(c.ready)
 		c.mu.Unlock()
@@ -807,6 +821,7 @@ func (c *Client) Logout(ctx context.Context) error {
 	c.phone, c.codeHash, c.account = "", "", ""
 	c.codeVia, c.codeNext, c.emailCode = "", "", false
 	c.mu.Unlock()
+	_ = c.st.Delete(keyAccount)
 	c.kick()
 	return nil
 }

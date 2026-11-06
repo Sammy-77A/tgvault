@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Sammy-77A/tgvault/internal/store"
+	"github.com/Sammy-77A/tgvault/internal/tgclient"
 )
 
 type selfMsg struct {
@@ -193,5 +194,71 @@ func TestClearAnsweredKeepsWhatIsWaiting(t *testing.T) {
 	left := pc.Requests()
 	if len(left) != 1 || left[0].Title != "Heat" || left[0].State != "requested" {
 		t.Errorf("only the waiting request stays: %+v", left)
+	}
+}
+
+// flaky is a Telegram connection that can be switched off.
+type flaky struct {
+	*fakeTG
+	down bool
+}
+
+func (f *flaky) Info() tgclient.Info {
+	if f.down {
+		return tgclient.Info{Status: tgclient.StatusConnecting}
+	}
+	return f.fakeTG.Info()
+}
+
+func (f *flaky) WaitReady(ctx context.Context) error {
+	if !f.down {
+		return nil
+	}
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestARequestMadeOfflineIsSentWhenTheConnectionReturns(t *testing.T) {
+	pc, _, tg := phoneAndPC(t)
+	st2, _ := store.Open(filepath.Join(t.TempDir(), "p.db"))
+	t.Cleanup(func() { st2.Close() })
+	link := &flaky{fakeTG: tg, down: true}
+	phone := NewWith(st2, link, t.TempDir())
+	phone.ReadOnly()
+	ctx := context.Background()
+
+	start := time.Now()
+	r, err := phone.MakeRequest(ctx, Request{Kind: "movie", TMDB: 27205, Title: "Inception", Year: 2010})
+	if err != nil || r.State != "queued" {
+		t.Fatalf("offline: %v %+v", err, r)
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Errorf("asking must not hang while offline: %s", time.Since(start))
+	}
+	if len(tg.self) != 0 {
+		t.Fatal("nothing can have been sent")
+	}
+	if _, err := phone.MakeRequest(ctx, Request{Kind: "movie", TMDB: 27205, Title: "Inception"}); err == nil {
+		t.Error("the same wish twice, even while queued")
+	}
+	phone.FlushQueued(ctx) // still offline: nothing happens
+	if len(tg.self) != 0 {
+		t.Fatal("offline flush must not send")
+	}
+	link.down = false
+	phone.FlushQueued(ctx)
+	if len(tg.self) != 1 || !strings.HasPrefix(tg.self[0].text, reqTag) {
+		t.Fatalf("back online it goes out: %+v", tg.self)
+	}
+	if got := phone.Requests()[0].State; got != "requested" {
+		t.Errorf("now waiting for the owner: %s", got)
+	}
+	fresh, _ := pc.SyncRequests(ctx)
+	if len(fresh) != 1 || fresh[0].Title != "Inception" {
+		t.Errorf("the PC receives it once: %+v", fresh)
+	}
+	phone.FlushQueued(ctx)
+	if len(tg.self) != 1 {
+		t.Error("a sent request is not sent again")
 	}
 }

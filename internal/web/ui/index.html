@@ -188,6 +188,11 @@
         <h2>Needs your decision</h2>
         <div id="moviesReview"></div>
       </div>
+      <div class="card" id="moviesLogCard">
+        <h2>Sort log</h2>
+        <p class="hint">New files are sorted on their own. This is what happened; you only get a notification when something needs you.</p>
+        <div id="moviesLog" class="log"></div>
+      </div>
       <p class="hint attribution">This product uses the TMDB API but is not endorsed or certified by TMDB.</p>
     </div>
 
@@ -293,6 +298,7 @@
   <header class="mb-top">
     <button type="button" id="mbBackBtn" class="mb-iconbtn" aria-label="Back" hidden><svg viewBox="0 0 24 24" class="mb-icon" fill="currentColor"><path d="M15.5 5 8.5 12l7 7 1.4-1.4L11.3 12l5.6-5.6z"/></svg></button>
     <div class="mb-logo" id="mbTitle"><span class="mb-mark"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span>tgmoviebox</div>
+    <div class="mb-status" id="mbStatus" hidden>Offline</div>
     <div class="mb-top-actions">
       <button type="button" id="mbSearchBtn" class="mb-iconbtn" aria-label="Search"><svg viewBox="0 0 24 24" class="mb-icon" fill="currentColor"><path d="M10 4a6 6 0 1 0 3.7 10.7l4.8 4.8 1.4-1.4-4.8-4.8A6 6 0 0 0 10 4zm0 2a4 4 0 1 1 0 8 4 4 0 0 1 0-8z"/></svg></button>
       <button type="button" id="mbGear" class="mb-iconbtn" aria-label="Settings"><svg viewBox="0 0 24 24" class="mb-icon" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg></button>

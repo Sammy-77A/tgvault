@@ -67,6 +67,12 @@
                 android:value="Watches for new photos and files and uploads them to the user's own Telegram channel" />
         </service>
 
+        <!-- The movie app's downloads, kept going with the app closed. -->
+        <service
+            android:name=".DownloadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
         <!-- WorkManager runs long backups as a data-sync foreground service. -->
         <service
             android:name="androidx.work.impl.foreground.SystemForegroundService"

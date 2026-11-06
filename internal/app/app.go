@@ -4,6 +4,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -17,6 +18,7 @@ import (
 	"github.com/Sammy-77A/tgvault/internal/pair"
 	"github.com/Sammy-77A/tgvault/internal/store"
 	"github.com/Sammy-77A/tgvault/internal/tgclient"
+	"github.com/Sammy-77A/tgvault/internal/tmdb"
 	"github.com/Sammy-77A/tgvault/internal/web"
 )
 
@@ -67,6 +69,7 @@ func Start(ctx context.Context, o Options) (*App, error) {
 	addr := o.Listener.Addr().String()
 	a := &App{URL: fmt.Sprintf("http://%s/?t=%s", addr, o.Token), cancel: cancel, done: make(chan struct{})}
 
+	tmdb.SetCacheDir(filepath.Join(o.DataDir, "cache"))
 	tg := tgclient.New(st, o.DataDir, o.Version)
 	eng := backup.New(st, tg, o.DataDir)
 	a.eng, a.st, a.tg = eng, st, tg
@@ -96,6 +99,21 @@ func Start(ctx context.Context, o Options) (*App, error) {
 		eng.ReadOnly()
 		// The library app is the movie app: its folder is the movie library.
 		_ = st.Set(backup.SettingMediaRoot, o.Library)
+		// say when a download ends, and when a request is answered
+		eng.SetDownloadHook(func(ev string, it backup.DLItem) {
+			if ev == "done" {
+				nw.Notify("Downloaded: "+it.Title, "Ready to watch offline. Tap to open it.", "")
+			} else if ev == "failed" {
+				nw.Notify("Download failed: "+it.Title, it.Error+" Tap to retry.", "")
+			}
+		})
+		eng.SetRequestHook(func(state string, r backup.Request) {
+			if state == "fulfilled" {
+				nw.Notify("Ready to download: "+r.Title, "The owner added it. Open the Library to download it.", "")
+			} else if state == "declined" {
+				nw.Notify("Not available: "+r.Title, "The owner couldn't add it.", "")
+			}
+		})
 		if o.TMDBKey != "" {
 			_ = st.Set(backup.SettingTMDBKey, o.TMDBKey)
 		}
@@ -113,7 +131,32 @@ func Start(ctx context.Context, o Options) (*App, error) {
 	log.Printf("tgvault %s started; data in %s; page at http://%s", o.Version, o.DataDir, addr)
 	go tg.Run(ctx)
 	go nw.Run(ctx)
+	if o.Library != "" {
+		// requests made offline go out as soon as Telegram is back
+		go func() {
+			t := time.NewTicker(20 * time.Second)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					fctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+					eng.FlushQueued(fctx)
+					cancel()
+				}
+			}
+		}()
+	}
 	if o.Phone == nil && o.Library == "" {
+		// New files are filed on their own; the owner hears only about problems.
+		eng.SetSortHook(func(problems []string) {
+			body := problems[0]
+			if len(problems) > 1 {
+				body += fmt.Sprintf(" (and %d more)", len(problems)-1)
+			}
+			nw.Notify(fmt.Sprintf("%d file(s) need your attention", len(problems)), body, a.URL+"#movies")
+		})
 		// On the PC, say when someone asks for a movie or show.
 		go eng.WatchRequests(ctx, 20*time.Second, func(rs []backup.Request) {
 			for _, r := range rs {
@@ -150,6 +193,26 @@ func (a *App) RunBackup(timeout time.Duration) bool {
 
 // SetForeground tells tgvault whether the phone app is on screen, so it stays
 // connected to Telegram while it is.
+// DownloadStatus is the download queue as JSON, for the phone's notification.
+func (a *App) DownloadStatus() string {
+	title, done, size, speed, count := a.eng.DownloadSummary()
+	b, _ := json.Marshal(map[string]any{"active": a.eng.DownloadsActive(), "title": title, "done": done, "size": size, "speed": speed, "count": count})
+	return string(b)
+}
+
+// DownloadAction pauses, resumes or cancels downloads from the notification.
+func (a *App) DownloadAction(action string) error {
+	if action == "cancel-all" {
+		for _, it := range a.eng.Downloads() {
+			if it.State == "queued" || it.State == "running" || it.State == "paused" {
+				_ = a.eng.DownloadControl("cancel", it.Path)
+			}
+		}
+		return nil
+	}
+	return a.eng.DownloadControl(action, "")
+}
+
 func (a *App) SetForeground(on bool) { a.foreground.Store(on) }
 
 // SetConditions passes the phone's network and charging state to the engine.

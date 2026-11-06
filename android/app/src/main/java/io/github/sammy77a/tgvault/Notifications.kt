@@ -13,6 +13,8 @@ object Notifications {
     private const val ALERTS = "alerts"
     private const val BACKUP = "backup"
     private const val WATCH = "watch"
+    const val DOWNLOADS = "downloads"
+    const val DOWNLOAD_ID = 3
     const val BACKUP_ID = 1
     const val WATCH_ID = 2
     private var nextId = 100
@@ -27,6 +29,11 @@ object Notifications {
         nm.createNotificationChannel(
             NotificationChannel(WATCH, "Watching for new files", NotificationManager.IMPORTANCE_MIN).apply {
                 description = "Always shown while tgvault keeps your backup going; hide it here if you like"
+            },
+        )
+        nm.createNotificationChannel(
+            NotificationChannel(DOWNLOADS, "Downloads", NotificationManager.IMPORTANCE_LOW).apply {
+                description = "Progress of movies and shows being downloaded"
             },
         )
         nm.createNotificationChannel(
@@ -46,8 +53,10 @@ object Notifications {
         .setPriority(NotificationCompat.PRIORITY_MIN)
         .build()
 
-    private fun openApp(ctx: Context): PendingIntent = PendingIntent.getActivity(
-        ctx, 0, Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+    /** Opens the app, on [open] ("downloads" or "library") when given. */
+    fun openApp(ctx: Context, open: String? = null): PendingIntent = PendingIntent.getActivity(
+        ctx, if (open == null) 0 else open.hashCode(),
+        Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).apply { if (open != null) putExtra("open", open) },
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
     )
 
@@ -55,7 +64,12 @@ object Notifications {
     fun alert(ctx: Context, title: String, body: String, link: String? = null) {
         if (!Core.hasNotifications(ctx)) return
         val tap = if (link == null) {
-            openApp(ctx)
+            // the movie app's messages open the page they are about
+            openApp(ctx, when {
+                title.startsWith("Downloaded:") || title.startsWith("Download failed:") -> "downloads"
+                title.startsWith("Ready to download:") || title.startsWith("Not available:") -> "library"
+                else -> null
+            })
         } else {
             PendingIntent.getActivity(ctx, 1, Intent(Intent.ACTION_VIEW, Uri.parse(link)), PendingIntent.FLAG_IMMUTABLE)
         }

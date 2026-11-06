@@ -97,6 +97,13 @@ func (e *Engine) online(ctx context.Context) error {
 	return nil
 }
 
+// SetRequestHook is told when the owner answers one of this device's requests
+// ("fulfilled" or "declined"), so the phone can notify.
+func (e *Engine) SetRequestHook(f func(state string, r Request)) { e.reqHook = f }
+
+// Connected reports whether Telegram is reachable right now (never blocks).
+func (e *Engine) Connected() bool { return e.tg.Info().Status == tgclient.StatusReady }
+
 func newReqID() string {
 	var b [6]byte
 	_, _ = rand.Read(b[:])
@@ -112,23 +119,51 @@ func (e *Engine) MakeRequest(ctx context.Context, r Request) (Request, error) {
 	if err != nil {
 		return r, err
 	}
-	if err := e.online(ctx); err != nil {
-		return r, err
-	}
 	for _, old := range e.requestList() {
-		if old.TMDB == r.TMDB && old.Kind == r.Kind && old.State == "requested" && sameWish(old, r) {
+		if old.TMDB == r.TMDB && old.Kind == r.Kind && (old.State == "requested" || old.State == "queued") && sameWish(old, r) {
 			return old, errors.New("you've already asked for that; it's waiting")
 		}
 	}
 	r.ID, r.At, r.State, r.From = newReqID(), time.Now().Unix(), "", e.Device()
 	body, _ := json.Marshal(r)
-	id, err := m.SendSelf(ctx, reqTag+string(body))
-	if err != nil {
-		return r, err
+	// With no connection the request is kept and sent when Telegram is back.
+	wctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	werr := e.tg.WaitReady(wctx)
+	cancel()
+	if werr == nil {
+		if id, err := m.SendSelf(ctx, reqTag+string(body)); err == nil {
+			r.MsgID, r.State = id, "requested"
+			_, err = e.st.MediaReqPut(store.MediaRequest{ID: r.ID, MsgID: id, State: "requested", Body: string(body), At: r.At})
+			return r, err
+		} else if ctx.Err() != nil {
+			return r, err
+		}
 	}
-	r.MsgID, r.State = id, "requested"
-	_, err = e.st.MediaReqPut(store.MediaRequest{ID: r.ID, MsgID: id, State: "requested", Body: string(body), At: r.At})
+	r.State = "queued"
+	_, err = e.st.MediaReqPut(store.MediaRequest{ID: r.ID, State: "queued", Body: string(body), At: r.At})
 	return r, err
+}
+
+// FlushQueued posts the requests that were made while offline.
+func (e *Engine) FlushQueued(ctx context.Context) {
+	if !e.Connected() {
+		return
+	}
+	m, err := e.mailbox()
+	if err != nil {
+		return
+	}
+	rows, _ := e.st.MediaReqs()
+	for _, row := range rows {
+		if row.State != "queued" {
+			continue
+		}
+		id, err := m.SendSelf(ctx, reqTag+row.Body)
+		if err != nil {
+			return // try again next time
+		}
+		_ = e.st.MediaReqSent(row.ID, id)
+	}
 }
 
 func sameWish(a, b Request) bool {
@@ -176,6 +211,7 @@ func (e *Engine) SyncRequests(ctx context.Context) ([]Request, error) {
 	if err := e.online(ctx); err != nil {
 		return nil, err
 	}
+	e.FlushQueued(ctx)
 	last, _ := strconv.Atoi(e.st.Get(settingLast))
 	var fresh []Request
 	top := last
@@ -226,8 +262,18 @@ func (e *Engine) SyncRequests(ctx context.Context) ([]Request, error) {
 				ID string `json:"id"`
 			}
 			if json.Unmarshal([]byte(strings.TrimPrefix(text, tag)), &a) == nil && a.ID != "" {
-				if _, known := e.st.MediaReq(a.ID); known {
-					return e.st.MediaReqState(a.ID, state)
+				if row, known := e.st.MediaReq(a.ID); known {
+					changed := row.State != state
+					if err := e.st.MediaReqState(a.ID, state); err != nil {
+						return err
+					}
+					if changed && e.reqHook != nil {
+						var r Request
+						_ = json.Unmarshal([]byte(row.Body), &r)
+						r.ID = a.ID
+						e.reqHook(state, r)
+					}
+					return nil
 				}
 				// the answer arrived before its request; keep it so the request, when it
 				// shows up, starts out answered

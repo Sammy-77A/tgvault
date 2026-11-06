@@ -224,7 +224,7 @@ function render() {
     $("connText").textContent = "Connected";
   } else if (ready) {
     conn.className = "conn warn";
-    $("connText").textContent = resuming && !tg.error ? "Connecting…" : "Reconnecting…";
+    $("connText").textContent = resuming && !tg.error ? "Connecting…" : (navigator.onLine === false ? "Offline" : "Reconnecting…");
   } else {
     conn.className = "conn";
     $("connText").textContent = "Not logged in";
@@ -2035,6 +2035,12 @@ async function loadMovies() {
   }
   $("moviesSort").disabled = !m.hasKey;
   renderRequests(m.requests || []);
+  api("/api/media/log").then((l) => {
+    const icon = { sorted: "✓", review: "?", duplicate: "≠", failed: "✗", request: "✉" };
+    replace($("moviesLog"), l.log.length ? l.log.slice(0, 60).map((e) => el("div", { class: "log-row " + e.kind },
+      el("span", { class: "log-k" }, icon[e.kind] || "•"), el("span", { class: "log-t" }, when(e.at)),
+      el("span", { class: "log-d" }, (e.path ? e.path.split("/").pop() + " " : "") + e.detail))) : el("p", { class: "hint" }, "Nothing sorted yet."));
+  }).catch(() => {});
   replace($("moviesSubKey"), el("p", {}, m.hasSubs ? "Subtitle search key saved. " : "For subtitle search in the phone app, add your free SubDL key (subdl.com → API). ",
     el("button", { type: "button", class: "small", onclick: () => setSubKey().catch((e) => toast(e.message)) }, m.hasSubs ? "Change" : "Enter subtitle key")));
   $("moviesReviewCard").hidden = !m.review.length;

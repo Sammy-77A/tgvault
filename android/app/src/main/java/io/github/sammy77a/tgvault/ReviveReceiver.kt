@@ -13,8 +13,21 @@ import kotlin.concurrent.thread
  */
 class ReviveReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (Core.library) return
         val pending = goAsync()
+        if (Core.library) {
+            // Downloads that were running when the phone restarted carry on from where they stopped.
+            thread(name = "tgvault-revive") {
+                try {
+                    Core.start(context.applicationContext)
+                    DownloadService.start(context.applicationContext)
+                } catch (e: Exception) {
+                    Log.e("tgvault", "couldn't resume the downloads", e)
+                } finally {
+                    pending.finish()
+                }
+            }
+            return
+        }
         thread(name = "tgvault-revive") {
             try {
                 Core.start(context.applicationContext)

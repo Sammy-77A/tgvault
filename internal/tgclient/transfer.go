@@ -33,6 +33,9 @@ const (
 // errGone means the message or its file has been deleted from the channel.
 var errGone = errors.New("this file is no longer in the Telegram channel")
 
+// ErrGone is returned for a file that was deleted from the channel.
+var ErrGone = errGone
+
 // ErrPartsExpired means Telegram no longer has the parts of a resumed upload.
 var ErrPartsExpired = errors.New("upload parts expired")
 

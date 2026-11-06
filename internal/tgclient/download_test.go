@@ -86,3 +86,25 @@ func TestConnectionErrorsAreExplainedInPlainWords(t *testing.T) {
 		t.Errorf("an answer from Telegram is not a connection problem: %q", got)
 	}
 }
+
+// A first download failed outright with "rpc error code 503: Timeout". That
+// is Telegram being slow, not a definite answer, so it must be retried.
+func TestA503TimeoutIsRetriedNotFatal(t *testing.T) {
+	c := quickRetries(t)
+	for _, e := range []error{tgerr.New(503, "Timeout"), tgerr.New(503, "TIMEOUT"), tgerr.New(502, "Bad Gateway"), tgerr.New(504, "Gateway Timeout"), tgerr.New(500, "WORKER_BUSY_TOO_LONG_RETRY")} {
+		calls := 0
+		err := c.retry(context.Background(), "t", func() error {
+			calls++
+			if calls < 3 {
+				return e
+			}
+			return nil
+		})
+		if err != nil || calls != 3 {
+			t.Errorf("%v: %d tries, %v", e, calls, err)
+		}
+	}
+	if transient(tgerr.New(400, "FILE_REFERENCE_EMPTY")) || transient(tgerr.New(401, "AUTH_KEY_UNREGISTERED")) {
+		t.Error("definite answers stay fatal")
+	}
+}

@@ -579,9 +579,9 @@ func (s *Server) mbRequests(w http.ResponseWriter, r *http.Request) {
 		s.mb.lastSync = time.Now()
 	}
 	s.mb.mu.Unlock()
-	if stale {
+	if stale && s.eng.Connected() { // offline: show what we know
 		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-		_, _ = s.eng.SyncRequests(ctx) // offline is fine: show what we know
+		_, _ = s.eng.SyncRequests(ctx)
 		cancel()
 	}
 	type reqM struct {
@@ -672,7 +672,12 @@ func (s *Server) mbLibrary(w http.ResponseWriter, r *http.Request) {
 	c, cerr := s.mbTMDB()
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 6)
-	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+	// Offline, answers come from the cache or not at all: don't wait for TMDB.
+	wait := 12 * time.Second
+	if !s.eng.Connected() {
+		wait = 1500 * time.Millisecond
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), wait)
 	defer cancel()
 	for i, t := range lib {
 		m := titleM{LibTitle: t}
@@ -730,12 +735,43 @@ func (s *Server) mbDownload(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	id, err := s.eng.DownloadMedia(r.Context(), paths)
+	n, err := s.eng.QueueDownloads(r.Context(), paths)
 	if err != nil {
 		fail(w, 400, tgclient.Friendly(err))
 		return
 	}
-	writeJSON(w, map[string]any{"task": id})
+	writeJSON(w, map[string]any{"queued": n})
+}
+
+// mbDownloads is the queue with live progress, for the page and the notification.
+func (s *Server) mbDownloads(w http.ResponseWriter, r *http.Request) {
+	items := s.eng.Downloads()
+	writeJSON(w, map[string]any{"items": items, "active": s.eng.DownloadsActive(), "online": s.eng.Connected()})
+}
+
+func (s *Server) mbDownloadAction(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Action string `json:"action"`
+		Path   string `json:"path"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		fail(w, 400, "bad request")
+		return
+	}
+	p := ""
+	if body.Path != "" {
+		cp, ok := cleanCloudPath(body.Path)
+		if !ok || !strings.HasPrefix(cp, s.eng.MediaRoot()+"/") {
+			fail(w, 403, "that isn't in the library")
+			return
+		}
+		p = cp
+	}
+	if err := s.eng.DownloadControl(body.Action, p); err != nil {
+		fail(w, 400, err.Error())
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
 }
 
 func (s *Server) mbRemove(w http.ResponseWriter, r *http.Request) {
@@ -1115,7 +1151,7 @@ func (s *Server) mbSubsKey(w http.ResponseWriter, r *http.Request) {
 
 // mbInfo: what the app needs to know about itself.
 func (s *Server) mbInfo(w http.ResponseWriter, r *http.Request) {
-	if !s.eng.HasTMDBKey() {
+	if !s.eng.HasTMDBKey() && s.eng.Connected() {
 		// the PC shares its keys through Saved Messages; look for them
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		_, _ = s.eng.SyncRequests(ctx)
