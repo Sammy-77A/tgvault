@@ -19,6 +19,7 @@ import android.webkit.MimeTypeMap
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.FileProvider
 import java.io.File
+import java.io.RandomAccessFile
 import mobile.Host
 import mobile.Mobile
 
@@ -47,9 +48,44 @@ object Core {
         }
         val u = Mobile.start(dataDir(app), storage, AndroidHost(app))
         url = u
+        mirrorLog(app)
         Mobile.setForeground(foreground)
         update(app)
         return u
+    }
+
+    /**
+     * Keeps a readable copy of tgvault's log in the app's folder on shared storage
+     * (Android/data/<package>/files/log.txt), so a problem can be looked at
+     * without the app being debuggable.
+     */
+    private fun mirrorLog(app: Context) {
+        val dir = app.getExternalFilesDir(null) ?: return
+        val src = File(Mobile.logPath(dataDir(app)))
+        val dst = File(dir, "log.txt")
+        Thread({
+            var last = -1L
+            while (true) {
+                try {
+                    val n = src.length()
+                    if (n != last && n > 0) {
+                        // the newest 400 KB is plenty
+                        val keep = 400_000L
+                        RandomAccessFile(src, "r").use { f ->
+                            val start = maxOf(0L, n - keep)
+                            f.seek(start)
+                            val buf = ByteArray((n - start).toInt())
+                            f.readFully(buf)
+                            dst.writeBytes(buf)
+                        }
+                        last = n
+                    }
+                } catch (e: Exception) {
+                    // sharing the log is a convenience; never a problem
+                }
+                Thread.sleep(10_000)
+            }
+        }, "tgvault-logmirror").apply { isDaemon = true }.start()
     }
 
     /** Passes current permissions, network and charging state to tgvault. */

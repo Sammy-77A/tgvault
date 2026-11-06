@@ -140,9 +140,7 @@ func (e *Engine) Downloads() []DLItem {
 		// what has arrived is the file as it stands, running or not: a paused
 		// download keeps its progress and carries on from it
 		if d.State != "done" {
-			if n := e.dlPartSize(d.Path); n > it.Done {
-				it.Done = n
-			}
+			it.Done = e.dlPartSize(d.Path) // the file as it stands is the truth
 		}
 		out = append(out, it)
 	}
@@ -603,6 +601,11 @@ func (e *Engine) dlTransfer(ctx context.Context, d store.MBDownload, v store.Ver
 		return err
 	}
 	live.lastDone = off
+	partNow := int64(-1)
+	if fi, err := os.Stat(part); err == nil {
+		partNow = fi.Size()
+	}
+	log.Printf("download %s: starting at %d of %d bytes (resumable %v, file on disk %d)", d.Path, off, v.Size, canResume, partNow)
 	pw := &progressWriter{w: f, e: e, live: live, done: off}
 	if canResume {
 		err = rd.DownloadFrom(ctx, v.MsgID, off, pw)
@@ -612,6 +615,7 @@ func (e *Engine) dlTransfer(ctx context.Context, d store.MBDownload, v store.Ver
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
+	log.Printf("download %s: this try wrote %d bytes (now at %d of %d), ended with: %v", d.Path, pw.done-off, pw.done, v.Size, err)
 	if err != nil {
 		return err // the part stays, so the next try starts from here
 	}
