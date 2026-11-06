@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -507,5 +508,29 @@ func TestTwoShowsWithOneNameAreToldApartByYear(t *testing.T) {
 	}
 	if !(mbMarks{lib: map[string][]int{"show|good omens": {0}}}).has("show", "Good Omens", 2019) {
 		t.Error("a folder without a year matches any")
+	}
+}
+
+// Every route the movie app's page calls must be let through by the library
+// gate; a forgotten one only shows up as a refusal on the phone.
+func TestEveryMovieRouteIsOnTheLibraryList(t *testing.T) {
+	src, err := os.ReadFile("server.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := 0
+	for _, m := range regexp.MustCompile(`HandleFunc\("((?:GET|POST) /api/mb/[^"]+)"`).FindAllStringSubmatch(string(src), -1) {
+		found++
+		if !movieRoutes[m[1]] {
+			t.Errorf("%s is served but not on movieRoutes, so the app would be refused", m[1])
+		}
+	}
+	if found < 10 {
+		t.Fatalf("only found %d movie routes; the pattern is stale", found)
+	}
+	for route := range movieRoutes {
+		if !strings.Contains(string(src), `"`+route+`"`) {
+			t.Errorf("%s is on movieRoutes but not served", route)
+		}
 	}
 }

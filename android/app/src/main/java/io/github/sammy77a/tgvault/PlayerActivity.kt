@@ -5,6 +5,7 @@ import android.app.AlertDialog
 import android.app.PictureInPictureParams
 import android.content.Context
 import android.content.pm.ActivityInfo
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.media.AudioManager
@@ -144,7 +145,7 @@ class PlayerActivity : Activity() {
                 addView(chip("CC+") { findSubtitles() })
                 addView(chip("Style") { subtitleStyleDialog() })
             }
-            addView(chip("PiP") { enterPip() })
+            if (pipOk) addView(chip("PiP") { enterPip() })
             addView(chip("Close") { finish() })
         }
         hud = TextView(this).apply {
@@ -372,6 +373,9 @@ class PlayerActivity : Activity() {
         say(if (locked) "Rotation locked" else "Rotation unlocked")
     }
 
+    /** Some phones don't offer picture-in-picture at all; then there's no button for it. */
+    private val pipOk by lazy { packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE) }
+
     private fun enterPip() {
         try {
             enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build())
@@ -382,7 +386,7 @@ class PlayerActivity : Activity() {
 
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        if (player?.isPlaying == true) enterPip()
+        if (pipOk && player?.isPlaying == true) enterPip()
     }
 
     override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: android.content.res.Configuration) {
