@@ -1111,7 +1111,7 @@ func (s *Server) mbInfo(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, map[string]any{
 		"hasTMDB": s.eng.HasTMDBKey(), "hasSubs": strings.TrimSpace(s.st.Get(backup.SettingSubtitleKey)) != "",
-		"root": s.eng.MediaRoot(), "library": s.library != "",
+		"root": s.eng.MediaRoot(), "library": s.library != "", "used": s.eng.MediaDiskUsage(),
 	})
 }
 

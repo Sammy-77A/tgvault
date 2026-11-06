@@ -338,3 +338,17 @@ func (e *Engine) Progress(cloudPath string) (pos, dur int64) {
 	dur, _ = strconv.ParseInt(f[1], 10, 64)
 	return pos, dur
 }
+
+// MediaDiskUsage is how much the downloaded videos take on this device.
+func (e *Engine) MediaDiskUsage() int64 {
+	var n int64
+	_ = filepath.WalkDir(filepath.Join(e.dataDir, "mb"), func(_ string, d os.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			if fi, err := d.Info(); err == nil {
+				n += fi.Size()
+			}
+		}
+		return nil
+	})
+	return n
+}

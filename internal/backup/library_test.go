@@ -299,3 +299,29 @@ func TestPlaybackProgress(t *testing.T) {
 		t.Error("only library files have progress")
 	}
 }
+
+func TestDiskUsageCountsDownloads(t *testing.T) {
+	e, _, _ := libRig(t)
+	if e.MediaDiskUsage() != 0 {
+		t.Fatal("nothing downloaded yet")
+	}
+	organize(t, e)
+	lib, _ := e.Library()
+	for _, tl := range lib {
+		if tl.Title == "Up" {
+			e.DownloadMedia(context.Background(), []string{tl.Folder})
+		}
+	}
+	waitTasks(t, e)
+	if e.MediaDiskUsage() <= 0 {
+		t.Error("a downloaded video should count")
+	}
+	// the "remove all" the settings page offers: the two library folders at once
+	root := e.MediaRoot()
+	if _, err := e.RemoveMedia([]string{root + "/Movies", root + "/Shows"}); err != nil {
+		t.Fatal(err)
+	}
+	if e.MediaDiskUsage() != 0 {
+		t.Errorf("everything should be gone: %d", e.MediaDiskUsage())
+	}
+}
