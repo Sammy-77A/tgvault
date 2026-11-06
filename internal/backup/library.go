@@ -421,6 +421,13 @@ func (e *Engine) decide(ctx context.Context, lk *lookup, p string) decision {
 	if tv {
 		g.Season, g.Episodes = info.Season, info.Episodes
 		eps, err := lk.season(ctx, chosen.ID, info.Season)
+		if tmdb.IsNotFound(err) {
+			// TMDB has no such season (season 0, "specials", is often missing):
+			// a definite answer, so ask the owner rather than trying forever
+			d.reason = fmt.Sprintf("TMDB has no season %d of %s", info.Season, chosen.Title)
+			d.body.Candidates = []Candidate{{Guess: g}}
+			return d
+		}
 		if err != nil {
 			d.retry = err
 			return d
@@ -547,7 +554,9 @@ func (e *Engine) organize(ctx context.Context, files []string, auto bool) (int64
 			switch {
 			case d.retry != nil:
 				waiting++
-				t.update(func(t *Task) { t.Errors = append(t.Errors, path.Base(p)+": "+d.retry.Error()) })
+				if !auto { // an automatic run just tries again later, quietly
+					t.update(func(t *Task) { t.Errors = append(t.Errors, path.Base(p)+": "+d.retry.Error()) })
+				}
 			case d.to != "" && d.to == p:
 				_ = e.st.MediaDrop(p) // already where it belongs
 			case d.to != "":

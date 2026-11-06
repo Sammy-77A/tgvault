@@ -370,3 +370,13 @@ func (c *Client) Image(ctx context.Context, size, p string) ([]byte, string, err
 	b, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	return b, resp.Header.Get("Content-Type"), err
 }
+
+// IsNotFound reports whether TMDB answered "no such thing" (a 404): a season or
+// show it doesn't have, which asking again won't change.
+func IsNotFound(err error) bool {
+	var he *httpError
+	return errors.As(err, &he) && he.code == 404
+}
+
+// NotFound is the error TMDB's 404 becomes (tests use it).
+var NotFound error = &httpError{404}

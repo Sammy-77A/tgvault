@@ -623,7 +623,7 @@ screens.downloads = async () => {
     el("button", { type: "button", class: "mb-primary", onclick: () => mbTab("library") }, "Open the library")) : null;
   const queue = (MB.dl ? MB.dl.items : []).filter((i) => i.state !== "done");
   const queueSection = queue.length ? el("section", { class: "mb-queue" },
-    el("div", { class: "mb-row-head" }, el("h2", {}, "Downloading"),
+    el("div", { class: "mb-row-head" }, el("h2", {}, "Downloading"), connChip(),
       queue.some((i) => i.state === "failed") ? el("button", { type: "button", class: "mb-link", onclick: () => dlControl("clear", "") }, "Clear failed") : null),
     queue.map((it) => el("div", { class: "mb-queue-item" }, el("strong", {}, it.title), dlBlock(it)))) : null;
   return el("div", { class: "mb-downloads" }, queueSection, cont, reqs,
@@ -647,6 +647,9 @@ function libCard(t) {
 screens.library = async ({ q = "", kind = "all" }) => {
   const lib = await api("/api/mb/library");
   const titles = lib.titles;
+  // posters still being looked up: ask again shortly, a few times
+  if (lib.pending && (MB.libTries = (MB.libTries || 0) + 1) <= 4) setTimeout(() => { if (MB.tab === "library") mbRefreshCurrent(); }, 2500);
+  if (!lib.pending) MB.libTries = 0;
   const out = el("div", { class: "mb-libgrid" });
   const status = el("p", { class: "mb-hint" });
   const input = el("input", { type: "search", class: "mb-search", placeholder: `Search the library (${titles.length})`, value: q, autocomplete: "off" });
@@ -742,6 +745,17 @@ async function mbPollDownloads(force) {
   MB.pollTimer = setTimeout(() => mbPollDownloads(), MB.dl && MB.dl.active ? 1200 : 6000);
 }
 
+// How the connection is treating the downloads, in words and signal bars, so a
+// slow download reads as a slow connection and not a stuck app.
+const QUALITY = { good: ["Good connection", 4], fair: ["Fair connection", 3], poor: ["Weak connection: slow", 1], retrying: ["Connection problem: retrying", 0], offline: ["No connection", 0], idle: ["", 0] };
+function connChip() {
+  const q = (MB.dl && MB.dl.quality) || "idle";
+  const [label, bars] = QUALITY[q] || QUALITY.idle;
+  if (!label) return null;
+  const sig = el("span", { class: "mb-bars q-" + q }, [1, 2, 3, 4].map((n) => el("i", { class: n <= bars ? "on" : "" })));
+  return el("span", { class: "mb-conn q-" + q }, sig, " ", label);
+}
+
 function mbPaintBanner() {
   const banner = $("mbBanner");
   const live = (MB.dl ? MB.dl.items : []).filter((i) => i.state === "running" || i.state === "queued" || i.state === "paused");
@@ -757,7 +771,7 @@ function mbPaintBanner() {
   banner.replaceChildren(
     el("button", { type: "button", class: "mb-banner-main", onclick: () => mbTab("downloads") },
       el("strong", {}, allPaused ? "Paused" : `Downloading${live.length > 1 ? ` ${live.length} files` : ""}`), " ",
-      lead.title, ` · ${pct}%`, speed > 1 ? ` · ${bytes(speed)}/s` : "", eta ? ` · ${eta}` : "", (MB.dl && MB.dl.online === false) ? " · waiting for a connection" : ""),
+      lead.title, ` · ${pct}%`, speed > 1 ? ` · ${bytes(speed)}/s` : "", eta ? ` · ${eta}` : "", " ", connChip()),
     el("button", { type: "button", class: "mb-banner-btn", onclick: () => dlControl(allPaused ? "resume" : "pause", "") }, allPaused ? "Resume" : "Pause"));
 }
 

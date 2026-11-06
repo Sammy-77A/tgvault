@@ -627,3 +627,38 @@ func (e *Engine) DownloadSummary() (title string, done, size int64, speed float6
 	}
 	return
 }
+
+// ConnectionQuality sums up how the network is treating the downloads:
+// "good", "fair" or "poor" from the speed they are getting, "retrying" while
+// they are failing and being tried again, and "offline" with no connection.
+// It also returns the total speed in bytes per second.
+func ConnectionQuality(items []DLItem, connected bool) (string, float64) {
+	if !connected {
+		return "offline", 0
+	}
+	var speed float64
+	running, retrying := 0, 0
+	for _, it := range items {
+		switch it.State {
+		case "running":
+			running++
+			speed += it.Speed
+		case "queued":
+			if it.Error != "" {
+				retrying++
+			}
+		}
+	}
+	switch {
+	case running == 0 && retrying > 0:
+		return "retrying", 0
+	case running == 0:
+		return "idle", 0
+	case speed >= 1_500_000:
+		return "good", speed
+	case speed >= 300_000:
+		return "fair", speed
+	default:
+		return "poor", speed
+	}
+}

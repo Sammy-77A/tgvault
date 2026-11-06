@@ -172,6 +172,10 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         Core.setForeground(true)
+        if (Core.library && ::swipe.isInitialized) {
+            swipe.removeCallbacks(downloadWatch)
+            swipe.postDelayed(downloadWatch, 1500)
+        }
         // Permissions may have changed in Android's settings.
         if (started) {
             pageRefresh() // files from another device may have arrived meanwhile
@@ -186,6 +190,25 @@ class MainActivity : Activity() {
     override fun onPause() {
         super.onPause()
         Core.setForeground(false)
+        keepDownloadsGoing() // leaving the app must not stop a download
+    }
+
+    // The movie app's downloads need the foreground service (and its notification)
+    // whenever something is queued. The page asks for it, and this checks too, so a
+    // download that was started any way at all is covered.
+    private val downloadWatch = object : Runnable {
+        override fun run() {
+            keepDownloadsGoing()
+            if (Core.library) swipe.postDelayed(this, 3000)
+        }
+    }
+
+    private fun keepDownloadsGoing() {
+        if (!Core.library || !started) return
+        thread {
+            val active = try { org.json.JSONObject(Mobile.downloadStatus()).optBoolean("active") } catch (e: Exception) { false }
+            if (active) runOnUiThread { DownloadService.start(this) }
+        }
     }
 
     // The page's web engine runs in extra processes that together take about as
@@ -200,6 +223,7 @@ class MainActivity : Activity() {
 
     override fun onStop() {
         super.onStop()
+        if (::swipe.isInitialized) swipe.removeCallbacks(downloadWatch)
         if (started && !isChangingConfigurations) swipe.postDelayed(closeLater, AWAY_MS)
     }
 

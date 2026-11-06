@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Sammy-77A/tgvault/internal/backup"
 	"github.com/Sammy-77A/tgvault/internal/store"
@@ -469,6 +470,17 @@ func TestLibraryListGetsTitlesPostersAndIDs(t *testing.T) {
 	}
 	if get(t, s.mbLibrary, "/api/mb/library", &lib) != 200 || len(lib.Titles) != 2 {
 		t.Fatalf("library: %+v", lib)
+	}
+	// the first answer is immediate, without waiting for TMDB; posters follow
+	if lib.Titles[0].Poster != "" {
+		t.Errorf("nothing was known yet, so no waiting for it: %+v", lib.Titles[0])
+	}
+	for i := 0; i < 100; i++ {
+		time.Sleep(30 * time.Millisecond)
+		get(t, s.mbLibrary, "/api/mb/library", &lib)
+		if lib.Titles[0].TMDB != 0 && lib.Titles[1].TMDB != 0 {
+			break
+		}
 	}
 	for _, tl := range lib.Titles {
 		switch tl.Title {

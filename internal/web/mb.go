@@ -33,6 +33,8 @@ type mbState struct {
 	mu          sync.Mutex
 	lastSync    time.Time
 	lastRefresh time.Time
+	meta        map[string]libMeta
+	resolving   bool
 }
 
 func (s *Server) mbTMDB() (*tmdb.Client, error) {
@@ -579,10 +581,13 @@ func (s *Server) mbRequests(w http.ResponseWriter, r *http.Request) {
 		s.mb.lastSync = time.Now()
 	}
 	s.mb.mu.Unlock()
-	if stale && s.eng.Connected() { // offline: show what we know
-		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-		_, _ = s.eng.SyncRequests(ctx)
-		cancel()
+	if stale && s.eng.Connected() {
+		// look for news in the background; the page shows what it knows right now
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			_, _ = s.eng.SyncRequests(ctx)
+		}()
 	}
 	type reqM struct {
 		backup.Request
@@ -644,17 +649,52 @@ func (s *Server) resolve(ctx context.Context, c *tmdb.Client, t backup.LibTitle)
 	return int(idf), pp
 }
 
+// libMeta is what is known about a library title from TMDB, kept between runs
+// so the library lists at once even with no connection or a busy one.
+type libMeta struct {
+	TMDB   int    `json:"t"`
+	Poster string `json:"p"`
+}
+
+func (s *Server) metaKey(t backup.LibTitle) string {
+	return t.Kind + "|" + t.Norm + "|" + strconv.Itoa(t.Year)
+}
+
+func (s *Server) loadMeta() map[string]libMeta {
+	s.mb.mu.Lock()
+	defer s.mb.mu.Unlock()
+	if s.mb.meta == nil {
+		s.mb.meta = map[string]libMeta{}
+		_ = json.Unmarshal([]byte(s.st.Get("mb.meta")), &s.mb.meta)
+	}
+	return s.mb.meta
+}
+
+func (s *Server) setMeta(k string, m libMeta) {
+	s.mb.mu.Lock()
+	s.mb.meta[k] = m
+	b, _ := json.Marshal(s.mb.meta)
+	s.mb.mu.Unlock()
+	_ = s.st.Set("mb.meta", string(b))
+}
+
+// mbLibrary answers from what is on the device, immediately. Posters and
+// TMDB ids come from what was learned before; titles not seen yet are looked
+// up in the background and the page asks again (pending), instead of waiting
+// for TMDB or for Telegram, which a running download keeps busy.
 func (s *Server) mbLibrary(w http.ResponseWriter, r *http.Request) {
 	s.mb.mu.Lock()
-	stale := time.Since(s.mb.lastRefresh) > 20*time.Second
+	stale := time.Since(s.mb.lastRefresh) > 30*time.Second
 	if stale {
 		s.mb.lastRefresh = time.Now()
 	}
 	s.mb.mu.Unlock()
-	if stale { // files the owner deleted drop out of the list
-		ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
-		s.eng.RefreshLibrary(ctx)
-		cancel()
+	if stale && s.eng.Connected() { // files the owner deleted drop out of the list
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			s.eng.RefreshLibrary(ctx)
+		}()
 	}
 	lib, err := s.eng.Library()
 	if err != nil {
@@ -668,17 +708,9 @@ func (s *Server) mbLibrary(w http.ResponseWriter, r *http.Request) {
 		Local  int    `json:"local"` // files on this phone
 		Total  int    `json:"total"`
 	}
+	meta := s.loadMeta()
 	out := make([]titleM, len(lib))
-	c, cerr := s.mbTMDB()
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, 6)
-	// Offline, answers come from the cache or not at all: don't wait for TMDB.
-	wait := 12 * time.Second
-	if !s.eng.Connected() {
-		wait = 1500 * time.Millisecond
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), wait)
-	defer cancel()
+	var missing []backup.LibTitle
 	for i, t := range lib {
 		m := titleM{LibTitle: t}
 		count := func(f backup.LibFile) {
@@ -695,19 +727,48 @@ func (s *Server) mbLibrary(w http.ResponseWriter, r *http.Request) {
 				count(f)
 			}
 		}
+		s.mb.mu.Lock()
+		known, ok := meta[s.metaKey(t)]
+		s.mb.mu.Unlock()
+		if ok {
+			m.TMDB, m.Poster = known.TMDB, known.Poster
+		} else {
+			missing = append(missing, t)
+		}
 		out[i] = m
-		if cerr == nil {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				sem <- struct{}{}
-				defer func() { <-sem }()
-				out[i].TMDB, out[i].Poster = s.resolve(ctx, c, t)
-			}()
+	}
+	pending := false
+	if len(missing) > 0 {
+		if c, err := s.mbTMDB(); err == nil {
+			pending = true
+			s.mb.mu.Lock()
+			busy := s.mb.resolving
+			s.mb.resolving = true
+			s.mb.mu.Unlock()
+			if !busy {
+				go func() {
+					defer func() { s.mb.mu.Lock(); s.mb.resolving = false; s.mb.mu.Unlock() }()
+					sem := make(chan struct{}, 4)
+					var wg sync.WaitGroup
+					for _, t := range missing {
+						wg.Add(1)
+						go func() {
+							defer wg.Done()
+							sem <- struct{}{}
+							defer func() { <-sem }()
+							ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+							defer cancel()
+							if id, poster := s.resolve(ctx, c, t); id > 0 {
+								s.setMeta(s.metaKey(t), libMeta{id, poster})
+							}
+						}()
+					}
+					wg.Wait()
+				}()
+			}
 		}
 	}
-	wg.Wait()
-	writeJSON(w, map[string]any{"titles": out, "root": s.eng.MediaRoot()})
+	writeJSON(w, map[string]any{"titles": out, "root": s.eng.MediaRoot(), "pending": pending})
 }
 
 func (s *Server) mbPaths(w http.ResponseWriter, r *http.Request) ([]string, bool) {
@@ -746,7 +807,8 @@ func (s *Server) mbDownload(w http.ResponseWriter, r *http.Request) {
 // mbDownloads is the queue with live progress, for the page and the notification.
 func (s *Server) mbDownloads(w http.ResponseWriter, r *http.Request) {
 	items := s.eng.Downloads()
-	writeJSON(w, map[string]any{"items": items, "active": s.eng.DownloadsActive(), "online": s.eng.Connected()})
+	q, speed := backup.ConnectionQuality(items, s.eng.Connected())
+	writeJSON(w, map[string]any{"items": items, "active": s.eng.DownloadsActive(), "online": s.eng.Connected(), "quality": q, "speed": speed})
 }
 
 func (s *Server) mbDownloadAction(w http.ResponseWriter, r *http.Request) {

@@ -56,6 +56,9 @@ func (f *fakeDB) SearchTV(_ context.Context, title string, year int) ([]tmdb.Res
 }
 
 func (f *fakeDB) SeasonEpisodes(_ context.Context, id, season int) ([]tmdb.Episode, error) {
+	if season == 0 {
+		return nil, tmdb.NotFound // season 0 ("specials") is often missing at TMDB
+	}
 	var out []tmdb.Episode
 	for i := 1; i <= 13; i++ {
 		out = append(out, tmdb.Episode{Number: i})
@@ -594,4 +597,32 @@ func twoDigits(n int) string {
 		return "0" + string(rune('0'+n))
 	}
 	return string(rune('0'+n/10)) + string(rune('0'+n%10))
+}
+
+func TestAMissingSeasonAtTMDBIsAQuestionNotAnEndlessRetry(t *testing.T) {
+	old := stableAfter
+	stableAfter = 0
+	defer func() { stableAfter = old }()
+	e, st, root, lib, told := autoRig(t)
+	write(t, filepath.Join(lib, "Marvels_Jessica_Jones_S00E01_Special_720p.mkv"), "x")
+	syncAll(t, e, st, root)
+	e.AutoSortOnce(context.Background())
+	waitTasks(t, e)
+	rv, _ := e.Review()
+	if len(rv) != 1 || !strings.Contains(rv[0].Reason, "no season 0") {
+		t.Fatalf("TMDB answered 404: ask the owner, once: %+v", rv)
+	}
+	if len(*told) != 1 {
+		t.Errorf("one message: %v", *told)
+	}
+	for _, ts := range e.Status().Tasks {
+		if len(ts.Errors) > 0 {
+			t.Errorf("an automatic run must not raise error dialogs: %v", ts.Errors)
+		}
+	}
+	e.AutoSortOnce(context.Background())
+	waitTasks(t, e)
+	if len(*told) != 1 {
+		t.Errorf("and not again on the next pass: %v", *told)
+	}
 }
