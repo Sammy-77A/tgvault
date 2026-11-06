@@ -35,6 +35,9 @@ const (
 
 // Engine runs scanning, uploading and restoring.
 type Engine struct {
+	msMu        sync.Mutex // guards mediaStores
+	mediaStores []MediaStore
+
 	st     *store.Store
 	tg     telegram
 	tmpDir string

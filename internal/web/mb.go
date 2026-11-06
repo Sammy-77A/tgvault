@@ -1219,6 +1219,25 @@ func (s *Server) mbSubsKey(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"hasKey": strings.TrimSpace(s.st.Get(backup.SettingSubtitleKey)) != ""})
 }
 
+// mbStorage lists where downloads can be kept and which place is in use;
+// POST chooses one for new downloads.
+func (s *Server) mbStorage(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		var body struct {
+			Path string `json:"path"`
+		}
+		if err := readJSON(r, &body); err != nil {
+			fail(w, 400, "bad request")
+			return
+		}
+		if err := s.eng.SetMediaDir(body.Path); err != nil {
+			fail(w, 400, err.Error())
+			return
+		}
+	}
+	writeJSON(w, s.eng.MediaStorage())
+}
+
 // mbInfo: what the app needs to know about itself.
 func (s *Server) mbInfo(w http.ResponseWriter, r *http.Request) {
 	if !s.eng.HasTMDBKey() && s.eng.Connected() {

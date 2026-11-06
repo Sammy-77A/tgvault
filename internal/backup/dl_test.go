@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -289,5 +290,50 @@ func TestADownloadThatGoesQuietIsAbandonedAndResumed(t *testing.T) {
 	got, _ := os.ReadFile(e.MediaLocal(p))
 	if !bytes.Equal(got, data) {
 		t.Fatal("the file should be whole")
+	}
+}
+
+func TestDownloadsGoWhereTheOwnerChoseAndOldOnesAreStillFound(t *testing.T) {
+	e, _, p, data := bigRig(t)
+	sd := filepath.Join(t.TempDir(), "sdcard", "tgmoviebox")
+	e.SetMediaStores([]MediaStore{{Label: "SD card", Path: sd}})
+	if err := e.SetMediaDir("/nowhere/else"); err == nil {
+		t.Fatal("only the places the phone offered can be chosen")
+	}
+	// first download goes to the phone's own folder
+	e.QueueDownloads(context.Background(), []string{p})
+	waitDownloads(t, e)
+	first := e.MediaLocal(p)
+	if !strings.HasPrefix(first, e.defaultMediaDir()) {
+		t.Fatalf("default is the phone's own folder: %s", first)
+	}
+	// now the SD card is chosen: the file already downloaded stays found there
+	if err := e.SetMediaDir(sd); err != nil {
+		t.Fatal(err)
+	}
+	if e.MediaLocal(p) != first {
+		t.Fatalf("an existing download is found where it is: %s", e.MediaLocal(p))
+	}
+	st := e.MediaStorage()
+	if st.Current != sd || len(st.Stores) != 2 || st.Used < int64(len(data)) {
+		t.Fatalf("storage summary: %+v", st)
+	}
+	// removing it frees the space wherever it is, and the next download uses the SD card
+	if n, err := e.RemoveMedia([]string{p}); err != nil || n != 1 {
+		t.Fatalf("remove: %d %v", n, err)
+	}
+	e.QueueDownloads(context.Background(), []string{p})
+	waitDownloads(t, e)
+	if got := e.MediaLocal(p); !strings.HasPrefix(got, sd) {
+		t.Fatalf("new downloads go to the SD card: %s", got)
+	}
+	b, _ := os.ReadFile(e.MediaLocal(p))
+	if !bytes.Equal(b, data) {
+		t.Fatal("the file should be whole")
+	}
+	// the card is taken out: back to the phone's folder
+	os.RemoveAll(filepath.Dir(sd))
+	if e.mediaBases()[0] != e.defaultMediaDir() {
+		t.Fatalf("a missing card falls back to the phone: %v", e.mediaBases())
 	}
 }

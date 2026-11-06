@@ -66,6 +66,8 @@ var movieRoutes = map[string]bool{
 	"POST /api/mb/download-action": true,
 	"POST /api/mb/download":        true,
 	"POST /api/mb/remove":          true,
+	"GET /api/mb/storage":          true,
+	"POST /api/mb/storage":         true,
 	"POST /api/mb/progress":        true,
 	"POST /api/mb/playlist":        true,
 	"GET /api/mb/subs/search":      true,

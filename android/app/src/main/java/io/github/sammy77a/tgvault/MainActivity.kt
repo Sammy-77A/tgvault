@@ -125,7 +125,7 @@ class MainActivity : Activity() {
             }
         }
         setContentView(swipe)
-        pendingOpen = intent.getStringExtra("open")
+        takeOpen(intent)
         // The movie app tells you when a download ends or a request is ready, so it asks once.
         if (Core.library && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val prefs = getSharedPreferences("perms", MODE_PRIVATE)
@@ -158,8 +158,19 @@ class MainActivity : Activity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        pendingOpen = intent.getStringExtra("open")
+        takeOpen(intent)
         openPending()
+    }
+
+    /** Where a notification wants the page to go; "update" installs the new version instead. */
+    private fun takeOpen(intent: Intent) {
+        val where = intent.getStringExtra("open")
+        if (where == "update") {
+            intent.removeExtra("open")
+            thread { Updater.installLatest(this) }
+        } else {
+            pendingOpen = where
+        }
     }
 
     private fun openPending() {
@@ -273,8 +284,12 @@ class MainActivity : Activity() {
             "share-log" -> shareLog()
             "check-update" -> thread {
                 val page = Updater.check(this)
-                runOnUiThread {
-                    if (page == null) Toast.makeText(this, "tgvault is up to date", Toast.LENGTH_SHORT).show()
+                if (page != null && Core.library) {
+                    Updater.installLatest(this)
+                } else {
+                    runOnUiThread {
+                        if (page == null) Toast.makeText(this, if (Core.library) "tgmoviebox is up to date" else "tgvault is up to date", Toast.LENGTH_SHORT).show()
+                    }
                 }
             }
         }

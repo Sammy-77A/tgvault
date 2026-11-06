@@ -68,6 +68,7 @@ object Notifications {
             openApp(ctx, when {
                 title.startsWith("Downloaded:") || title.startsWith("Download failed:") -> "downloads"
                 title.startsWith("Ready to download:") || title.startsWith("Not available:") -> "library"
+                title.startsWith("A tgmoviebox update") -> "update"
                 else -> null
             })
         } else {

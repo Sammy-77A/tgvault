@@ -227,3 +227,8 @@ body.mb-on .jump { display: none !important; }
 .mb-bars i:nth-child(1) { height: 30%; } .mb-bars i:nth-child(2) { height: 55%; } .mb-bars i:nth-child(3) { height: 78%; } .mb-bars i:nth-child(4) { height: 100%; }
 .mb-bars i.on { opacity: 1; }
 .mb-rq-all { padding: .4rem 0 .6rem; font-weight: 600; }
+
+.mb-where { padding: .35rem 0; }
+.mb-space-list { max-height: 38vh; overflow-y: auto; margin: .5rem 0; }
+.mb-space-row { display: block; padding: .3rem 0; }
+.mb-settings h3 { margin: .9rem 0 .3rem; font-size: 1rem; }

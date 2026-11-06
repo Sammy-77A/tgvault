@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/Sammy-77A/tgvault/internal/app"
+	"github.com/Sammy-77A/tgvault/internal/backup"
 	"github.com/Sammy-77A/tgvault/internal/web"
 )
 
@@ -218,6 +219,23 @@ func SetVolumes(volumes string) {
 		out = append(out, web.Volume{Label: f[0], Path: f[1], Free: free, Total: total})
 	}
 	a.SetVolumes(out)
+}
+
+// SetMediaStores passes the places downloads can be kept, one per line as
+// "label<TAB>path".
+func SetMediaStores(stores string) {
+	a := current()
+	if a == nil {
+		return
+	}
+	var out []backup.MediaStore
+	for _, line := range strings.Split(stores, "\n") {
+		f := strings.Split(line, "\t")
+		if len(f) == 2 && f[0] != "" && f[1] != "" {
+			out = append(out, backup.MediaStore{Label: f[0], Path: f[1]})
+		}
+	}
+	a.SetMediaStores(out)
 }
 
 // WifiOnly reports whether backups should wait for Wi-Fi.

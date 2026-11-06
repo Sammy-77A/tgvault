@@ -94,8 +94,23 @@ object Core {
         (ctx.applicationContext as? TgvaultApp)?.pin() // the Wi-Fi only setting may have changed
         Mobile.setPermissions(hasStorage(ctx), hasNotifications(ctx), hasBattery(ctx))
         Mobile.setVolumes(volumes(ctx))
+        if (library) Mobile.setMediaStores(mediaStores(ctx))
         Mobile.setConditions(isUnmetered(ctx), isCharging(ctx))
     }
+
+    /**
+     * The places downloads can be kept: the app's own folder on each storage, which
+     * needs no permission, including an SD card. One per line, "label<TAB>path".
+     */
+    private fun mediaStores(ctx: Context): String =
+        ctx.getExternalFilesDirs(null).filterNotNull().mapIndexed { i, d ->
+            val removable = try { Environment.isExternalStorageRemovable(d) } catch (e: Exception) { i > 0 }
+            val label = when {
+                removable -> if (i > 1) "SD card $i" else "SD card"
+                else -> "Phone storage, visible in the Files app"
+            }
+            "$label\t${File(d, "tgmoviebox").absolutePath}"
+        }.joinToString("\n")
 
     /** Tells tgvault whether the app is on screen; in the background it disconnects when idle. */
     fun setForeground(on: Boolean) {

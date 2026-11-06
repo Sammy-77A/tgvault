@@ -714,13 +714,87 @@ async function mbSettings() {
       el("label", {}, "Subtitle search key", el("span", { class: "mb-hint" }, "Free at subdl.com (Account, API). Needed to search for subtitles while watching."), key),
       el("div", { class: "mb-storage" },
         el("span", {}, info.used ? `Downloads on this phone: ${bytes(info.used)}` : "No downloads on this phone."),
-        info.used ? el("button", { type: "button", class: "mb-link", onclick: () => { $("dlg").close(); removeFiles([`${info.root}/Movies`, `${info.root}/Shows`], "All downloads"); } }, "Remove all") : null),
+        el("button", { type: "button", class: "mb-link", onclick: () => { $("dlg").close(); setTimeout(mbStorage, 50); } }, "Storage and space")),
       el("div", { class: "mb-set-links" },
         el("a", { href: "tgvault://check-update" }, "Check for an update"),
         el("a", { href: "tgvault://share-log" }, "Share the log")),
       el("p", { class: "mb-hint" }, "This product uses the TMDB API but is not endorsed or certified by TMDB.")),
     buttons: [{ label: "Close", value: null }, { label: "Save", value: "save", primary: true }],
     run: async () => { if (key.value.trim()) { await api("/api/mb/subs/key", { key: key.value }); MB.info = null; } },
+  });
+}
+
+// ---------- storage: where downloads are kept, and freeing space ----------
+
+async function mbStorage() {
+  let st, lib;
+  try {
+    [st, lib] = await Promise.all([api("/api/mb/storage"), api("/api/mb/library")]);
+  } catch (e) {
+    toast("Couldn't read the storage: " + e.message);
+    return;
+  }
+  // every downloaded video, with what is needed to judge what to remove
+  const files = [];
+  for (const t of lib.titles || []) {
+    const add = (f) => {
+      if (!f.local || !/\.(mkv|mp4|avi|mov|webm|m4v|ts)$/i.test(f.name || "")) return;
+      const ep = f.season && f.episodes && f.episodes.length ? ` S${pad2(f.season)}E${pad2(f.episodes[0])}` : "";
+      files.push({ path: f.path, label: t.title + ep, size: f.size || 0, watched: f.dur > 0 && !f.pos });
+    };
+    (t.files || []).forEach(add);
+    (t.seasons || []).forEach((sn) => sn.episodes.forEach(add));
+  }
+  files.sort((a, b) => b.size - a.size);
+
+  const where = (st.stores || []).map((x) => {
+    const r = el("input", { type: "radio", name: "mbWhere", value: x.path, checked: x.path === st.current });
+    r.addEventListener("change", async () => {
+      try {
+        await api("/api/mb/storage", { path: x.path });
+        toast(`New downloads will go to: ${x.label}`);
+        MB.info = null;
+      } catch (e) { toast(e.message); }
+    });
+    return el("label", { class: "mb-rq-season mb-where" }, r, el("span", {}, ` ${x.label}`, el("span", { class: "mb-card-sub" }, ` ${bytes(x.free)} free`)));
+  });
+
+  const total = el("span", { class: "mb-hint" });
+  const boxes = files.map((f) => {
+    const c = el("input", { type: "checkbox", "data-path": f.path });
+    c.addEventListener("change", sum);
+    return { f, c };
+  });
+  function picked() { return boxes.filter((b) => b.c.checked); }
+  function sum() {
+    const n = picked();
+    total.textContent = n.length ? `${n.length} selected, ${bytes(n.reduce((a, b) => a + b.f.size, 0))} to free` : "";
+  }
+  const list = files.length
+    ? el("div", { class: "mb-space-list" }, boxes.map(({ f, c }) => el("label", { class: "mb-rq-ep mb-space-row" }, c, ` ${f.label}`, el("span", { class: "mb-card-sub" }, ` ${bytes(f.size)}`, f.watched ? " · watched" : ""))))
+    : el("p", { class: "mb-hint" }, "Nothing is downloaded to this phone right now.");
+  const watchedBtn = el("button", { type: "button", class: "mb-secondary", onclick: () => { boxes.forEach((b) => { b.c.checked = b.f.watched; }); sum(); } }, "Select watched");
+  const allBtn = el("button", { type: "button", class: "mb-secondary", onclick: () => { const on = !boxes.every((b) => b.c.checked); boxes.forEach((b) => { b.c.checked = on; }); sum(); } }, "Select all");
+
+  await dialog({
+    title: "Storage and space",
+    body: el("div", { class: "mb-settings" },
+      el("p", { class: "mb-hint" }, `Downloads use ${bytes(st.used)}. Your phone has ${bytes((st.stores[0] || {}).free || 0)} free.`),
+      el("h3", {}, "Keep new downloads on"),
+      where,
+      el("p", { class: "mb-hint" }, "Things already downloaded stay where they are and keep working. An SD card that is taken out puts new downloads back on the phone."),
+      el("h3", {}, "Free up space"),
+      files.length ? el("div", { class: "mb-actions" }, watchedBtn, allBtn) : null,
+      list, total),
+    buttons: [{ label: "Close", value: null }, ...(files.length ? [{ label: "Delete selected", value: "del", danger: true }] : [])],
+    run: async () => {
+      const n = picked();
+      if (!n.length) throw new Error("Tick what to delete first.");
+      await api("/api/mb/remove", { paths: n.map((b) => b.f.path) });
+      toast(`Freed ${bytes(n.reduce((a, b) => a + b.f.size, 0))}`);
+      MB.info = null;
+      mbRender(true);
+    },
   });
 }
 

@@ -69,10 +69,126 @@ type LibTitle struct {
 	Newest  int64       `json:"newest"`
 }
 
-// MediaLocal is where a library file lives on this device once downloaded.
+// MediaStore is a place downloads can be kept.
+type MediaStore struct {
+	Label string `json:"label"`
+	Path  string `json:"path"`
+	Free  int64  `json:"free"`
+}
+
+const settingMediaDir = "mb.dir"
+
+// SetMediaStores tells the engine which places the device offers for
+// downloads (the phone's storage, an SD card).
+func (e *Engine) SetMediaStores(list []MediaStore) {
+	e.msMu.Lock()
+	e.mediaStores = list
+	e.msMu.Unlock()
+}
+
+func (e *Engine) defaultMediaDir() string { return filepath.Join(e.dataDir, "mb") }
+
+// mediaBases are the folders downloads may be in, the one new downloads go to
+// first. Files already downloaded stay where they are when the choice changes.
+func (e *Engine) mediaBases() []string {
+	def := e.defaultMediaDir()
+	cur := def
+	if d := e.st.Get(settingMediaDir); d != "" {
+		if fi, err := os.Stat(d); err == nil && fi.IsDir() {
+			cur = d // an SD card that was taken out falls back to the phone
+		}
+	}
+	out := []string{cur}
+	add := func(p string) {
+		for _, x := range out {
+			if x == p {
+				return
+			}
+		}
+		out = append(out, p)
+	}
+	add(def)
+	e.msMu.Lock()
+	for _, m := range e.mediaStores {
+		add(m.Path)
+	}
+	e.msMu.Unlock()
+	return out
+}
+
+// MediaLocal is where a library file lives on this device once downloaded (or
+// where it will go, if it isn't there yet).
 func (e *Engine) MediaLocal(cloudPath string) string {
-	rel := strings.TrimPrefix(cloudPath, e.MediaRoot()+"/")
-	return filepath.Join(e.dataDir, "mb", filepath.FromSlash(rel))
+	rel := filepath.FromSlash(strings.TrimPrefix(cloudPath, e.MediaRoot()+"/"))
+	bases := e.mediaBases()
+	for _, b := range bases {
+		p := filepath.Join(b, rel)
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+		if _, err := os.Stat(p + ".part"); err == nil {
+			return p
+		}
+	}
+	return filepath.Join(bases[0], rel)
+}
+
+// MediaStorage describes where downloads can be kept and which is chosen.
+type MediaStorage struct {
+	Stores  []MediaStore `json:"stores"`
+	Current string       `json:"current"`
+	Used    int64        `json:"used"`
+}
+
+func (e *Engine) MediaStorage() MediaStorage {
+	cur := e.mediaBases()[0]
+	def := e.defaultMediaDir()
+	free := func(p string) int64 {
+		if f, err := diskFree(p); err == nil {
+			return int64(f)
+		}
+		return 0
+	}
+	_ = os.MkdirAll(def, 0o755)
+	out := MediaStorage{Current: cur, Used: e.MediaDiskUsage()}
+	out.Stores = append(out.Stores, MediaStore{Label: "Phone storage", Path: def, Free: free(def)})
+	e.msMu.Lock()
+	for _, m := range e.mediaStores {
+		if m.Path != def {
+			_ = os.MkdirAll(m.Path, 0o755)
+			out.Stores = append(out.Stores, MediaStore{Label: m.Label, Path: m.Path, Free: free(m.Path)})
+		}
+	}
+	e.msMu.Unlock()
+	return out
+}
+
+// SetMediaDir chooses where new downloads go. It must be one of the places the
+// device offered.
+func (e *Engine) SetMediaDir(path string) error {
+	ok := path == e.defaultMediaDir()
+	e.msMu.Lock()
+	for _, m := range e.mediaStores {
+		if m.Path == path {
+			ok = true
+		}
+	}
+	e.msMu.Unlock()
+	if !ok {
+		return errors.New("that isn't a place this device offers")
+	}
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		return fmt.Errorf("can't use that storage: %v", err)
+	}
+	probe := filepath.Join(path, ".tgvault-write-test")
+	if err := os.WriteFile(probe, []byte("x"), 0o644); err != nil {
+		return fmt.Errorf("can't write there: %v", err)
+	}
+	_ = os.Remove(probe)
+	if path == e.defaultMediaDir() {
+		path = ""
+	}
+	return e.st.Set(settingMediaDir, path)
 }
 
 func (e *Engine) haveLocal(v store.Version) bool {
@@ -227,13 +343,22 @@ func (e *Engine) inMediaRoot(p string) bool { return underPrefix(p, e.MediaRoot(
 func (e *Engine) RemoveMedia(paths []string) (int, error) {
 	root := e.MediaRoot()
 	n := 0
-	base := filepath.Join(e.dataDir, "mb")
+	bases := e.mediaBases()
+	under := func(local string) string {
+		for _, b := range bases {
+			if strings.HasPrefix(local, b+string(filepath.Separator)) {
+				return b
+			}
+		}
+		return ""
+	}
 	for _, p := range paths {
 		if !e.inMediaRoot(p) || p == root {
 			return n, errors.New("that isn't in the library")
 		}
 		local := e.MediaLocal(p)
-		if !strings.HasPrefix(local, base+string(filepath.Separator)) {
+		base := under(local)
+		if base == "" {
 			continue
 		}
 		fi, err := os.Stat(local)
@@ -290,14 +415,16 @@ func (e *Engine) Progress(cloudPath string) (pos, dur int64) {
 // MediaDiskUsage is how much the downloaded videos take on this device.
 func (e *Engine) MediaDiskUsage() int64 {
 	var n int64
-	_ = filepath.WalkDir(filepath.Join(e.dataDir, "mb"), func(_ string, d os.DirEntry, err error) error {
-		if err == nil && !d.IsDir() {
-			if fi, err := d.Info(); err == nil {
-				n += fi.Size()
+	for _, b := range e.mediaBases() {
+		_ = filepath.WalkDir(b, func(_ string, d os.DirEntry, err error) error {
+			if err == nil && !d.IsDir() {
+				if fi, err := d.Info(); err == nil {
+					n += fi.Size()
+				}
 			}
-		}
-		return nil
-	})
+			return nil
+		})
+	}
 	return n
 }
 

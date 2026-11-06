@@ -232,6 +232,9 @@ func (a *App) SetPermissions(p web.PhonePermissions) {
 
 // SetVolumes tells the page which storages the phone has (internal storage,
 // memory cards), for choosing folders.
+// SetMediaStores passes the places the phone offers for downloads.
+func (a *App) SetMediaStores(m []backup.MediaStore) { a.eng.SetMediaStores(m) }
+
 func (a *App) SetVolumes(v []web.Volume) {
 	if a.phone != nil {
 		a.phone.SetVolumes(v)
