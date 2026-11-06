@@ -38,8 +38,12 @@ func (f *mailTG) ReadBlock(context.Context, int, int64) ([]byte, error)       { 
 func (f *mailTG) Thumbs(context.Context, []int) (map[int][]byte, error)       { return nil, nil }
 func (f *mailTG) DeleteMessages(context.Context, []int) error                 { return nil }
 func (f *mailTG) EditCaption(context.Context, int, string) error              { return nil }
-func (f *mailTG) Exists(context.Context, []int) (map[int]tgclient.RemoteFile, error) {
-	return nil, nil
+func (f *mailTG) Exists(_ context.Context, ids []int) (map[int]tgclient.RemoteFile, error) {
+	out := map[int]tgclient.RemoteFile{}
+	for _, id := range ids {
+		out[id] = tgclient.RemoteFile{MsgID: id}
+	}
+	return out, nil
 }
 func (f *mailTG) MessageLink(int) string                                             { return "" }
 func (f *mailTG) ScanChannel(context.Context, func(tgclient.RemoteFile) error) error { return nil }

@@ -367,7 +367,9 @@ func (e *Engine) RefreshLibrary(ctx context.Context) {
 		ids = append(ids, v.MsgID)
 	}
 	remote, err := e.tg.Exists(ctx, ids)
-	if err != nil {
+	if err != nil || len(remote) == 0 {
+		// no answer, or an answer that says nothing exists: more likely a
+		// hiccup than the whole library having been deleted
 		return
 	}
 	var gone []int
