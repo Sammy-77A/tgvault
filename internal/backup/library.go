@@ -137,6 +137,13 @@ func (e *Engine) Review() ([]ReviewItem, error) {
 	}
 	out := []ReviewItem{}
 	for _, n := range notes {
+		// a file that was deleted or moved away no longer needs a decision
+		if vs, _ := e.st.Versions(n.CloudPath); len(vs) == 0 {
+			if it, err := e.st.ItemByPath(n.CloudPath); err != nil || !it.LocalPresent {
+				_ = e.st.MediaDrop(n.CloudPath)
+				continue
+			}
+		}
 		var b reviewBody
 		_ = json.Unmarshal([]byte(n.Body), &b)
 		it := ReviewItem{Path: n.CloudPath, Name: path.Base(n.CloudPath), Reason: n.Reason,

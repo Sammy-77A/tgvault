@@ -3,11 +3,13 @@ package backup
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/Sammy-77A/tgvault/internal/media"
+	"github.com/Sammy-77A/tgvault/internal/store"
 	"github.com/Sammy-77A/tgvault/internal/tmdb"
 )
 
@@ -324,4 +326,37 @@ func TestDiskUsageCountsDownloads(t *testing.T) {
 	if e.MediaDiskUsage() != 0 {
 		t.Errorf("everything should be gone: %d", e.MediaDiskUsage())
 	}
+}
+
+func TestReviewForgetsFilesThatAreGone(t *testing.T) {
+	e, lib, _ := libRig(t)
+	organize(t, e)
+	rv, _ := e.Review()
+	if len(rv) != 3 {
+		t.Fatalf("setup: %d waiting", len(rv))
+	}
+	path := "R/tgmoviebox/random holiday video.mp4"
+	os.Remove(filepath.Join(lib, "random holiday video.mp4"))
+	e.scanRoot(mustRoot(t, e))
+	if _, err := e.DeleteFromCloudMany(context.Background(), []string{path}); err != nil {
+		t.Fatal(err)
+	}
+	waitTasks(t, e)
+	rv, _ = e.Review()
+	for _, r := range rv {
+		if r.Name == "random holiday video.mp4" {
+			t.Errorf("a deleted file should leave the review list: %+v", r)
+		}
+	}
+	if len(rv) != 2 {
+		t.Errorf("the two Shameless files stay: %d", len(rv))
+	}
+}
+
+func mustRoot(t *testing.T, e *Engine) store.Root {
+	roots, err := e.st.Roots()
+	if err != nil || len(roots) == 0 {
+		t.Fatal("no root")
+	}
+	return roots[0]
 }
