@@ -65,6 +65,20 @@ func (w *Watcher) Run(ctx context.Context) {
 	}
 }
 
+// Notify shows a notification now, unless notifications are off. url is opened
+// when it is clicked; empty means the tgvault page.
+func (w *Watcher) Notify(title, body, url string) {
+	if !Enabled(w.st) {
+		return
+	}
+	if url == "" {
+		url = w.url
+	}
+	if err := w.send(title, body, url); err != nil {
+		log.Printf("notification: %v", err)
+	}
+}
+
 // Test sends a sample notification.
 func (w *Watcher) Test() error {
 	return w.send("tgvault notifications work", "You'll only hear from tgvault when something needs you.", w.url)

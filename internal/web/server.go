@@ -64,6 +64,11 @@ type Server struct {
 	shares  shareDirs      // folders for files being shared or opened (phone)
 	plays   playKeys       // links handed to video players
 	library string         // set in the library app: the only folder it shows
+	mb      mbState        // the movie app's bookkeeping
+	lists   listKeys       // playlists handed to the native player
+
+	tmdbBase, imageBase string // tests point these at a fake TMDB
+	subsBase, subsDL    string // ... and a fake subtitle service
 }
 
 // SetPairing shows the "log in from your PC" details while logged out.
@@ -100,7 +105,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("X-Frame-Options", "DENY")
-	w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'")
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; frame-src https://www.youtube-nocookie.com")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 
 	if r.URL.Path == "/api/ping" {
@@ -111,6 +116,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// link with a key for one file instead.
 	if strings.HasPrefix(r.URL.Path, "/play/") {
 		s.play(w, r)
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/sub/") {
+		s.sub(w, r)
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/plist/") {
+		s.plist(w, r)
 		return
 	}
 	// The browser is opened with ?t=<token>; swap it for a cookie.
@@ -204,6 +217,31 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/tasks/{id}/dismiss", s.dismissTask)
 	s.mux.HandleFunc("POST /api/reconcile", s.reconcile)
 
+	s.mux.HandleFunc("GET /api/mb/info", s.mbInfo)
+	s.mux.HandleFunc("GET /api/mb/home", s.mbHome)
+	s.mux.HandleFunc("GET /api/mb/browse", s.mbBrowse)
+	s.mux.HandleFunc("GET /api/mb/search", s.mbSearch)
+	s.mux.HandleFunc("GET /api/mb/title", s.mbTitle)
+	s.mux.HandleFunc("GET /api/mb/season", s.mbSeason)
+	s.mux.HandleFunc("GET /api/mb/img", s.mbImg)
+	s.mux.HandleFunc("POST /api/mb/request", s.mbRequest)
+	s.mux.HandleFunc("GET /api/mb/requests", s.mbRequests)
+	s.mux.HandleFunc("GET /api/mb/library", s.mbLibrary)
+	s.mux.HandleFunc("POST /api/mb/download", s.mbDownload)
+	s.mux.HandleFunc("POST /api/mb/remove", s.mbRemove)
+	s.mux.HandleFunc("POST /api/mb/progress", s.mbProgress)
+	s.mux.HandleFunc("POST /api/mb/playlist", s.mbPlaylist)
+	s.mux.HandleFunc("GET /api/mb/subs/search", s.mbSubsSearch)
+	s.mux.HandleFunc("POST /api/mb/subs/get", s.mbSubsGet)
+	s.mux.HandleFunc("POST /api/mb/subs/key", s.mbSubsKey)
+	s.mux.HandleFunc("GET /sub/", s.sub)
+	s.mux.HandleFunc("GET /api/media", s.media)
+	s.mux.HandleFunc("POST /api/media/key", s.mediaKey)
+	s.mux.HandleFunc("POST /api/media/organize", s.mediaOrganize)
+	s.mux.HandleFunc("POST /api/media/resolve", s.mediaResolve)
+	s.mux.HandleFunc("POST /api/media/skip", s.mediaSkip)
+	s.mux.HandleFunc("POST /api/media/answer", s.mediaAnswer)
+	s.mux.HandleFunc("GET /api/media/search", s.mediaSearch)
 	s.mux.HandleFunc("POST /api/autostart", s.setAutostart)
 	s.mux.HandleFunc("POST /api/notify", s.setNotify)
 	s.mux.HandleFunc("POST /api/notify/test", s.testNotify)

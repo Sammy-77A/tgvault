@@ -6,7 +6,9 @@
 <title>tgvault</title>
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="mb.css">
 <script src="app.js" defer></script>
+<script src="mb.js" defer></script>
 </head>
 <body>
 <header class="top">
@@ -96,6 +98,7 @@
     <nav class="tabs" role="tablist">
       <button data-tab="overview" data-short="Home" class="active">Overview</button>
       <button data-tab="cloud" data-short="Files">Cloud files</button>
+      <button data-tab="movies" data-short="Movies">Movies &amp; shows</button>
       <button data-tab="space" data-short="Space">Free up space</button>
       <button data-tab="activity" data-short="Activity">Activity <span class="badge" id="activityBadge" hidden></span></button>
       <button data-tab="settings" data-short="Settings">Settings</button>
@@ -167,6 +170,25 @@
         <ul class="list files" id="cloudList"></ul>
         <p class="hint" id="cloudEmpty" hidden>Nothing here yet.</p>
       </div>
+    </div>
+
+    <div data-panel="movies" hidden>
+      <div class="card" id="moviesReqCard" hidden>
+        <h2>Requests</h2>
+        <div id="moviesReqs"></div>
+      </div>
+      <div class="card">
+        <h2>Movies &amp; shows</h2>
+        <p class="hint">Put videos in <b id="moviesRoot"></b> in any order. tgvault reads their names, checks them against TMDB and files them as <i>Movies/Title (Year)</i> and <i>Shows/Title/Season 01</i>, on this PC and in your backup together. Anything it isn't sure about waits below for you.</p>
+        <div id="moviesKey"></div>
+        <div id="moviesSubKey"></div>
+        <div class="toolbar"><button id="moviesSort" class="primary" type="button">Sort now</button></div>
+      </div>
+      <div class="card" id="moviesReviewCard" hidden>
+        <h2>Needs your decision</h2>
+        <div id="moviesReview"></div>
+      </div>
+      <p class="hint attribution">This product uses the TMDB API but is not endorsed or certified by TMDB.</p>
     </div>
 
     <div data-panel="space" hidden>
@@ -266,6 +288,23 @@
     </div>
   </section>
 </main>
+
+<section id="mb" hidden>
+  <header class="mb-top">
+    <button type="button" id="mbBackBtn" class="mb-iconbtn" aria-label="Back" hidden><svg viewBox="0 0 24 24" class="mb-icon" fill="currentColor"><path d="M15.5 5 8.5 12l7 7 1.4-1.4L11.3 12l5.6-5.6z"/></svg></button>
+    <div class="mb-logo" id="mbTitle"><span class="mb-mark"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span>tgmoviebox</div>
+    <div class="mb-top-actions">
+      <button type="button" id="mbSearchBtn" class="mb-iconbtn" aria-label="Search"><svg viewBox="0 0 24 24" class="mb-icon" fill="currentColor"><path d="M10 4a6 6 0 1 0 3.7 10.7l4.8 4.8 1.4-1.4-4.8-4.8A6 6 0 0 0 10 4zm0 2a4 4 0 1 1 0 8 4 4 0 0 1 0-8z"/></svg></button>
+      <button type="button" id="mbGear" class="mb-iconbtn" aria-label="Settings"><svg viewBox="0 0 24 24" class="mb-icon" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg></button>
+    </div>
+  </header>
+  <div class="mb-banner" id="mbBanner" hidden></div>
+  <div id="mbBody"></div>
+  <nav class="mb-tabs" aria-label="Sections">
+    <button type="button" data-mb="home" class="active"><svg viewBox="0 0 24 24" class="mb-icon" fill="currentColor"><path d="M12 3 3 10.500V21h6v-6h6v6h6V10.500z"/></svg><span>Home</span></button>
+    <button type="button" data-mb="downloads"><svg viewBox="0 0 24 24" class="mb-icon" fill="currentColor"><path d="M11 4h2v8.200l3.100-3.100 1.400 1.400-5.500 5.500-5.500-5.500 1.400-1.400L11 12.200zM5 18h14v2H5z"/></svg><span>Downloads</span></button>
+  </nav>
+</section>
 
 <dialog id="dlg">
   <form method="dialog" id="dlgForm">

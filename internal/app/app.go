@@ -22,13 +22,15 @@ import (
 
 // Options configures a running tgvault.
 type Options struct {
-	DataDir  string
-	Listener net.Listener // the local web page listens here
-	Token    string       // protects the web page
-	Version  string
-	Pairing  bool // let a logged-in PC log this device in over the local network
-	Phone    *PhoneOptions
-	Library  string // the library app: only this folder of the backup can be browsed and downloaded
+	DataDir     string
+	Listener    net.Listener // the local web page listens here
+	Token       string       // protects the web page
+	Version     string
+	Pairing     bool // let a logged-in PC log this device in over the local network
+	Phone       *PhoneOptions
+	TMDBKey     string // the library app's TMDB key
+	SubtitleKey string // the library app's subtitle service key
+	Library     string // the library app: only this folder of the backup can be browsed and downloaded
 }
 
 // PhoneOptions are set when tgvault runs inside the Android app.
@@ -92,6 +94,14 @@ func Start(ctx context.Context, o Options) (*App, error) {
 	if o.Library != "" {
 		srv.SetLibrary(o.Library)
 		eng.ReadOnly()
+		// The library app is the movie app: its folder is the movie library.
+		_ = st.Set(backup.SettingMediaRoot, o.Library)
+		if o.TMDBKey != "" {
+			_ = st.Set(backup.SettingTMDBKey, o.TMDBKey)
+		}
+		if o.SubtitleKey != "" {
+			_ = st.Set(backup.SettingSubtitleKey, o.SubtitleKey)
+		}
 		o.Pairing = false // nothing in the library app opens to the local network
 	}
 	if o.Pairing {
@@ -103,6 +113,14 @@ func Start(ctx context.Context, o Options) (*App, error) {
 	log.Printf("tgvault %s started; data in %s; page at http://%s", o.Version, o.DataDir, addr)
 	go tg.Run(ctx)
 	go nw.Run(ctx)
+	if o.Phone == nil && o.Library == "" {
+		// On the PC, say when someone asks for a movie or show.
+		go eng.WatchRequests(ctx, 20*time.Second, func(rs []backup.Request) {
+			for _, r := range rs {
+				nw.Notify("New request: "+r.Title, requestSummary(r), a.URL+"#movies")
+			}
+		})
+	}
 	go func() {
 		if err := eng.Run(ctx); err != nil {
 			log.Printf("engine: %v", err)
@@ -168,3 +186,23 @@ func (a *App) Stop() { a.cancel() }
 
 // Done is closed once tgvault has fully stopped.
 func (a *App) Done() <-chan struct{} { return a.done }
+
+// requestSummary says what was asked for, in a notification's one line.
+func requestSummary(r backup.Request) string {
+	what := "a movie"
+	if r.Kind == "show" {
+		what = "a show"
+		switch len(r.Seasons) {
+		case 0:
+			what += ", all seasons"
+		case 1:
+			what += fmt.Sprintf(", season %d", r.Seasons[0])
+		default:
+			what += fmt.Sprintf(", %d seasons", len(r.Seasons))
+		}
+	}
+	if r.Year > 0 {
+		return fmt.Sprintf("%s (%d): %s. Open tgvault to file it and mark it done.", r.Title, r.Year, what)
+	}
+	return fmt.Sprintf("%s: %s. Open tgvault to file it and mark it done.", r.Title, what)
+}

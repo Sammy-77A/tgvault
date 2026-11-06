@@ -18,6 +18,9 @@ android {
     defaultConfig {
         applicationId = "io.github.sammy77a.tgvault" + if (libraryFolder.isEmpty()) "" else ".library"
         buildConfigField("String", "LIBRARY_FOLDER", "\"$libraryFolder\"")
+        // Service keys for the movie app, from the build's environment (GitHub secrets); never in the repository.
+        buildConfigField("String", "TMDB_KEY", "\"${System.getenv("TMDB_KEY") ?: ""}\"")
+        buildConfigField("String", "SUBTITLE_KEY", "\"${System.getenv("SUBTITLE_KEY") ?: ""}\"")
         manifestPlaceholders["appLabel"] = if (libraryFolder.isEmpty()) "tgvault" else libraryFolder.substringAfterLast('/')
         minSdk = 26
         targetSdk = 35

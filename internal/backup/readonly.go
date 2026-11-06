@@ -20,4 +20,7 @@ func (readOnlyTG) EditCaption(context.Context, int, string) error              {
 // ReadOnly makes the engine unable to upload, delete or edit anything in
 // Telegram, whatever it is asked to do. It is for the library app. Call it
 // before Run.
-func (e *Engine) ReadOnly() { e.tg = readOnlyTG{e.tg} }
+func (e *Engine) ReadOnly() {
+	e.tg = readOnlyTG{e.tg}
+	e.readOnly = true
+}

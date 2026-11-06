@@ -45,6 +45,7 @@
             android:name=".PlayerActivity"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize"
             android:exported="false"
+            android:supportsPictureInPicture="true"
             android:theme="@style/Theme.Tgvault.Player" />
 
         <receiver

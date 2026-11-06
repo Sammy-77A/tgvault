@@ -109,7 +109,7 @@ func Open(path string) (*Store, error) {
 	}
 	// SQLite allows one writer; a single connection avoids "database is locked".
 	db.SetMaxOpenConns(1)
-	if _, err := db.Exec(schema + partsSchema + chainsSchema + foldersSchema); err != nil {
+	if _, err := db.Exec(schema + partsSchema + chainsSchema + foldersSchema + mediaSchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("create schema: %w", err)
 	}

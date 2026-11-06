@@ -172,6 +172,8 @@ function reportFinishedTasks() {
     if (!t.finished || reportedTasks.has(t.id)) continue;
     reportedTasks.add(t.id);
     if (!tasksSeeded) continue; // finished before this page opened
+    if (library()) continue; // the movie app reports its own downloads
+    if (t.kind === "organize" && tab === "movies") loadMovies();
     if (t.kind === "move" && tab === "cloud") loadCloud(); // folders can change without any file changing
     if ((t.errors || []).length) {
       const list = t.errors.slice(0, 20);
@@ -229,8 +231,10 @@ function render() {
   }
 
   document.body.classList.toggle("library", !!library());
+  $("mb").hidden = !(ready && library());
+  document.body.classList.toggle("mb-on", ready && !!library());
   if (!ready) return renderLogin(tg);
-  if (library()) return renderLibrary();
+  if (library()) return mbShow();
   renderOverview();
   renderSettings();
   const failed = state.engine.counts.failed || 0;
@@ -2017,6 +2021,124 @@ function renderSettings() {
   }
 }
 
+// ---------- movies & shows ----------
+
+async function loadMovies() {
+  const m = await api("/api/media");
+  $("moviesRoot").textContent = m.root;
+  const keyBox = $("moviesKey");
+  if (m.hasKey) {
+    replace(keyBox, el("p", {}, "TMDB key saved. ", el("button", { type: "button", class: "small", onclick: () => setTMDBKey().catch((e) => toast(e.message)) }, "Change")));
+  } else {
+    replace(keyBox, el("p", {}, "To recognise titles, tgvault needs your free TMDB key (themoviedb.org → Settings → API). "),
+      el("button", { type: "button", class: "primary", onclick: () => setTMDBKey().catch((e) => toast(e.message)) }, "Enter TMDB key"));
+  }
+  $("moviesSort").disabled = !m.hasKey;
+  renderRequests(m.requests || []);
+  replace($("moviesSubKey"), el("p", {}, m.hasSubs ? "Subtitle search key saved. " : "For subtitle search in the phone app, add your free SubDL key (subdl.com → API). ",
+    el("button", { type: "button", class: "small", onclick: () => setSubKey().catch((e) => toast(e.message)) }, m.hasSubs ? "Change" : "Enter subtitle key")));
+  $("moviesReviewCard").hidden = !m.review.length;
+  replace($("moviesReview"), m.review.map(reviewRow));
+}
+
+function ago(unix) { return when(unix); }
+
+function renderRequests(all) {
+  const open = all.filter((r) => r.state === "requested");
+  const done = all.filter((r) => r.state !== "requested" && r.title).slice(0, 8);
+  $("moviesReqCard").hidden = !open.length && !done.length;
+  const what = (r) => r.kind === "movie" ? "Movie" :
+    "Show, " + (r.episodes && Object.keys(r.episodes).length ? "chosen episodes of season " + Object.keys(r.episodes).join(", ")
+      : !r.seasons || !r.seasons.length ? "all seasons" : r.seasons.length === 1 ? "season " + r.seasons[0] : "seasons " + r.seasons.join(", "));
+  const answer = (r, fulfilled) => api("/api/media/answer", { id: r.id, fulfilled })
+    .then(() => { toast(fulfilled ? `${r.title} marked as filed; the phone will offer it.` : `${r.title} declined.`); loadMovies(); })
+    .catch((e) => toast(e.message));
+  const row = (r, actions) => el("div", { class: "req-row" },
+    r.poster ? el("img", { src: `/api/mb/img?p=${encodeURIComponent(r.poster)}&s=w92`, alt: "", width: 46, height: 69 }) : el("div", { class: "req-noposter" }),
+    el("div", { class: "req-main" },
+      el("strong", {}, r.title, r.year ? ` (${r.year})` : ""),
+      el("div", { class: "hint" }, what(r), " · asked ", ago(r.at), r.from ? ` from ${r.from}` : ""),
+      el("div", { class: "hint" }, r.state === "requested" ? "" : r.state === "fulfilled" ? "Marked as filed" : "Declined")),
+    el("div", { class: "req-actions" }, actions));
+  replace($("moviesReqs"),
+    open.map((r) => row(r, [
+      el("button", { type: "button", class: "primary", onclick: () => answer(r, true) }, "Mark as filed"),
+      el("button", { type: "button", class: "danger", onclick: () => answer(r, false) }, "Decline"),
+    ])),
+    done.length ? el("p", { class: "hint" }, "Answered") : null,
+    done.map((r) => row(r, [])));
+}
+
+async function setSubKey() {
+  const input = el("input", { type: "password", autocomplete: "off", placeholder: "SubDL API key", style: "width:100%" });
+  const saved = await dialog({
+    title: "Subtitle search key",
+    body: [el("p", { class: "hint" }, "A free key from subdl.com (Account → API). The phone app uses it to search for subtitles. Leave empty to remove it."), input],
+    buttons: [{ label: "Cancel", value: null }, { label: "Save", value: "save", primary: true }],
+    run: async () => { await api("/api/mb/subs/key", { key: input.value }); },
+  });
+  if (saved) loadMovies();
+}
+
+async function setTMDBKey() {
+  const input = el("input", { type: "password", autocomplete: "off", placeholder: "API key or read access token", style: "width:100%" });
+  const saved = await dialog({
+    title: "TMDB key",
+    body: [el("p", { class: "hint" }, "Paste the API key (or the long read access token). It is kept on this PC only."), input],
+    buttons: [{ label: "Cancel", value: null }, { label: "Save", value: "save", primary: true }],
+    run: async () => { await api("/api/media/key", { key: input.value }); },
+  });
+  if (saved) loadMovies();
+}
+
+function candLabel(c) { return `${c.title}${c.year ? " (" + c.year + ")" : ""}`; }
+
+async function resolveFile(item, cand) {
+  const guess = { kind: item.kind === "episode" ? "episode" : cand.kind || "movie", tmdb: cand.tmdb || 0, title: cand.title, year: cand.year || 0 };
+  if (guess.kind === "episode") { guess.season = item.season || 0; guess.episodes = item.episodes || []; }
+  await api("/api/media/resolve", { path: item.path, guess });
+  toast(`Filing ${item.name}`);
+  loadMovies();
+  refresh();
+}
+
+function reviewRow(item) {
+  const picks = (item.candidates || []).map((c) =>
+    el("button", { type: "button", onclick: () => resolveFile(item, c).catch((e) => toast(e.message)) }, "Use ", candLabel(c)));
+  return el("div", { class: "review-item" },
+    el("strong", {}, item.name),
+    el("div", { class: "why" }, item.reason + ".", item.parsed && item.parsed !== "unknown" ? ` Read as: ${item.parsed}.` : ""),
+    el("div", { class: "picks" }, picks,
+      el("button", { type: "button", onclick: () => searchTitle(item) }, "Search for the title…"),
+      el("button", { type: "button", class: "danger", onclick: () => api("/api/media/skip", { path: item.path }).then(loadMovies).catch((e) => toast(e.message)) }, "Leave it alone")));
+}
+
+async function searchTitle(item) {
+  const q = el("input", { type: "text", value: item.title || "", style: "width:100%" });
+  const kind = el("select", {}, el("option", { value: "movie" }, "Movie"), el("option", { value: "episode" }, "TV show"));
+  kind.value = item.kind === "episode" ? "episode" : "movie";
+  const out = el("div", { class: "picks" });
+  const go = async () => {
+    try {
+      const r = await api(`/api/media/search?kind=${kind.value}&q=${encodeURIComponent(q.value)}`);
+      replace(out, r.results.length ? r.results.map((c) => el("button", { type: "button", onclick: async () => {
+        try { await resolveFile({ ...item, kind: kind.value }, c); $("dlg").close(); } catch (e) { toast(e.message); }
+      } }, "Use ", candLabel(c))) : el("p", { class: "hint" }, "Nothing found."));
+    } catch (e) { replace(out, el("p", { class: "hint" }, e.message)); }
+  };
+  q.addEventListener("keydown", (ev) => { if (ev.key === "Enter") go(); });
+  await dialog({ title: "Find the title", body: [kind, q, el("button", { type: "button", onclick: go }, "Search"), out], buttons: [{ label: "Close", value: null }] });
+}
+
+async function sortMovies() {
+  try {
+    await api("/api/media/organize", {});
+    toast("Sorting started; see Activity for progress.");
+    refresh();
+    setTimeout(loadMovies, 4000);
+  } catch (e) { toast(e.message); }
+}
+
 // ---------- wiring ----------
 
 function showTab(name) {
@@ -2026,6 +2148,7 @@ function showTab(name) {
   if (name === "cloud") loadCloud();
   if (name === "activity") loadActivity();
   if (name === "space") loadSpace();
+  if (name === "movies") loadMovies();
 }
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -2056,6 +2179,8 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   $("cloudRefresh").addEventListener("click", () => refreshCloud(true));
   $("cloudNewFolder").addEventListener("click", () => newFolderHere().catch((err) => toast(err.message)));
+  $("moviesSort").addEventListener("click", sortMovies);
+  if (location.hash === "#movies") showTab("movies"); // a request notification opens this tab
   let grid = false;
   try { grid = localStorage.getItem("tgvault.grid") === "1"; } catch {}
   setGrid(grid);

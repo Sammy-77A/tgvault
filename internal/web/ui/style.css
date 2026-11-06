@@ -350,8 +350,22 @@ body.viewing > .jump.page { display: none; }
 
 /* The library app (a friend's copy) shows the file list and nothing else. */
 .library .tabs, .library [data-panel="overview"], .library [data-panel="space"],
-.library [data-panel="activity"], .library [data-panel="settings"] { display: none; }
+.library [data-panel="activity"], .library [data-panel="settings"], .library [data-panel="movies"] { display: none; }
 
 /* Organizing: a folder row that dragged files can be dropped on */
 .list li.drop { outline: 2px dashed var(--accent, currentColor); outline-offset: -2px; background: var(--accent-soft); }
 .toast button { margin-left: .5rem; }
+
+/* Movies & shows: files waiting for a decision */
+.review-item { border-top: 1px solid var(--line, #8883); padding: .8rem 0; }
+.review-item:first-child { border-top: 0; }
+.review-item .why { margin: .2rem 0; }
+.review-item .picks { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .5rem; }
+.review-item .picks button { text-align: left; }
+.attribution { text-align: center; opacity: .7; }
+
+.req-row { display: flex; gap: .8rem; align-items: center; padding: .6rem 0; border-top: 1px solid var(--line); }
+.req-row:first-child { border-top: 0; }
+.req-row img, .req-noposter { width: 46px; height: 69px; border-radius: 6px; object-fit: cover; background: var(--line); flex: none; }
+.req-main { flex: 1; min-width: 0; }
+.req-actions { display: flex; gap: .4rem; flex-wrap: wrap; justify-content: flex-end; }

@@ -55,10 +55,19 @@ type Host interface {
 }
 
 var (
-	mu      sync.Mutex
-	running *app.App
-	library string // set for the library app
+	mu                   sync.Mutex
+	running              *app.App
+	library              string // set for the library app
+	tmdbKey, subtitleKey string
 )
+
+// SetKeys gives the library app its service keys (TMDB for titles and
+// pictures, and the subtitle search service). Call it before Start.
+func SetKeys(tmdb, subtitles string) {
+	mu.Lock()
+	defer mu.Unlock()
+	tmdbKey, subtitleKey = tmdb, subtitles
+}
 
 // SetLibrary makes this the library app, which only shows and downloads one
 // folder of the backup (a path such as "Movies"). Call it before Start.
@@ -100,7 +109,7 @@ func Start(dataDir, storageRoot string, host Host) (string, error) {
 		return "", err
 	}
 	a, err := app.Start(context.Background(), app.Options{
-		DataDir: dataDir, Listener: l, Token: hex.EncodeToString(buf), Version: Version, Library: library,
+		DataDir: dataDir, Listener: l, Token: hex.EncodeToString(buf), Version: Version, Library: library, TMDBKey: tmdbKey, SubtitleKey: subtitleKey,
 		Phone: &app.PhoneOptions{StorageRoot: storageRoot, FileChanged: host.FileChanged, Notify: host.ShowNotification,
 			Share: func(paths []string) { host.ShareFiles(strings.Join(paths, "\n")) }, Open: host.OpenFile},
 	})

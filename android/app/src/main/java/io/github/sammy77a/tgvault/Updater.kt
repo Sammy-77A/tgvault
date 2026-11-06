@@ -16,7 +16,6 @@ object Updater {
     private const val DAY_MS = 24L * 60 * 60 * 1000
 
     fun checkDaily(ctx: Context) {
-        if (Core.library) return
         val prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val now = System.currentTimeMillis()
         if (now - prefs.getLong("lastCheck", 0) < DAY_MS) return
@@ -26,13 +25,18 @@ object Updater {
 
     /** Returns the release page if a newer build exists, after notifying. Call off the main thread. */
     fun check(ctx: Context): String? {
-        if (Core.library) return null // updates to the library app are sent by hand
         return try {
             val info = ctx.packageManager.getPackageInfo(ctx.packageName, 0)
             @Suppress("DEPRECATION")
             val installed = info.versionCode.toLong()
             val test = (info.versionName ?: "").contains("-test")
-            val conn = URL(if (test) "$REPO/tags/android-test" else "$REPO/latest").openConnection() as HttpURLConnection
+            // The movie app follows its own release, so the normal app's update notice never sees it.
+            val url = when {
+                Core.library -> "$REPO/tags/android-library"
+                test -> "$REPO/tags/android-test"
+                else -> "$REPO/latest"
+            }
+            val conn = URL(url).openConnection() as HttpURLConnection
             conn.connectTimeout = 15_000
             conn.readTimeout = 15_000
             conn.setRequestProperty("Accept", "application/vnd.github+json")
@@ -41,7 +45,7 @@ object Updater {
             val latest = Regex("versionCode: (\\d+)").find(release.optString("body"))?.groupValues?.get(1)?.toLong() ?: return null
             if (latest <= installed) return null
             val page = release.getString("html_url")
-            Notifications.alert(ctx, "A tgvault update is ready", "Tap to download it, then open the APK to install.", page)
+            Notifications.alert(ctx, if (Core.library) "A tgmoviebox update is ready" else "A tgvault update is ready", "Tap to download it, then open the APK to install.", page)
             page
         } catch (e: Exception) {
             Log.w("tgvault", "update check: $e")

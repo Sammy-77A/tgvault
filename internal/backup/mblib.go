@@ -1,0 +1,340 @@
+package backup
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+
+	"github.com/Sammy-77A/tgvault/internal/media"
+	"github.com/Sammy-77A/tgvault/internal/store"
+)
+
+// The movie app's view of the library folder: Movies and Shows as the
+// organizer files them, with what's on this phone (downloaded for offline
+// watching) next to what's in Telegram.
+
+// DataDir is where the engine keeps its own files.
+func (e *Engine) DataDir() string { return e.dataDir }
+
+// LibSub is a subtitle file beside a video.
+type LibSub struct {
+	Path   string `json:"path"`
+	MsgID  int    `json:"msgId"`
+	Lang   string `json:"lang,omitempty"`
+	Local  bool   `json:"local"`
+	Name   string `json:"name"`
+	Size   int64  `json:"size"`
+	Source string `json:"source,omitempty"` // "library", or "downloaded" when it came from a subtitle search
+}
+
+// LibFile is one video in the library.
+type LibFile struct {
+	Path     string   `json:"path"`
+	Name     string   `json:"name"`
+	MsgID    int      `json:"msgId"`
+	Size     int64    `json:"size"`
+	Season   int      `json:"season,omitempty"`
+	Episodes []int    `json:"episodes,omitempty"`
+	Local    bool     `json:"local"` // downloaded to this phone
+	Subs     []LibSub `json:"subs,omitempty"`
+	Pos      int64    `json:"pos,omitempty"` // where playback left off, milliseconds
+	Dur      int64    `json:"dur,omitempty"`
+	Added    int64    `json:"added,omitempty"` // when it was uploaded
+}
+
+// LibSeason is the episodes of a show's season that are in the library.
+type LibSeason struct {
+	Number   int       `json:"number"`
+	Episodes []LibFile `json:"episodes"`
+}
+
+// LibTitle is a movie or a show.
+type LibTitle struct {
+	Kind    string      `json:"kind"` // "movie" or "show"
+	Title   string      `json:"title"`
+	Year    int         `json:"year,omitempty"`
+	Norm    string      `json:"norm"`
+	Folder  string      `json:"folder"`
+	Files   []LibFile   `json:"files,omitempty"`   // a movie's videos
+	Seasons []LibSeason `json:"seasons,omitempty"` // a show's seasons
+	Size    int64       `json:"size"`
+	Newest  int64       `json:"newest"`
+}
+
+// MediaLocal is where a library file lives on this device once downloaded.
+func (e *Engine) MediaLocal(cloudPath string) string {
+	rel := strings.TrimPrefix(cloudPath, e.MediaRoot()+"/")
+	return filepath.Join(e.dataDir, "mb", filepath.FromSlash(rel))
+}
+
+func (e *Engine) haveLocal(v store.Version) bool {
+	fi, err := os.Stat(e.MediaLocal(v.CloudPath))
+	return err == nil && !fi.IsDir() && fi.Size() == v.Size
+}
+
+func langOf(name string) string {
+	stem := strings.TrimSuffix(name, path.Ext(name))
+	if i := strings.LastIndex(stem, "."); i >= 0 && langTags[strings.ToLower(stem[i+1:])] {
+		return strings.ToLower(stem[i+1:])
+	}
+	return ""
+}
+
+// Library lists the movies and shows in the library folder.
+func (e *Engine) Library() ([]LibTitle, error) {
+	root := e.MediaRoot()
+	vs, err := e.st.LatestUnder(root)
+	if err != nil {
+		return nil, err
+	}
+	type key struct{ kind, folder string }
+	titles := map[key]*LibTitle{}
+	subsOf := map[string][]LibSub{} // folder -> subtitle files
+	var vids []store.Version
+	for _, v := range vs {
+		rel := strings.TrimPrefix(v.CloudPath, root+"/")
+		if !strings.HasPrefix(rel, "Movies/") && !strings.HasPrefix(rel, "Shows/") {
+			continue
+		}
+		ext := path.Ext(v.CloudPath)
+		switch {
+		case media.IsSubtitle(ext):
+			dir := path.Dir(v.CloudPath)
+			subsOf[dir] = append(subsOf[dir], LibSub{Path: v.CloudPath, MsgID: v.MsgID, Lang: langOf(v.CloudPath),
+				Local: e.haveLocal(v), Name: path.Base(v.CloudPath), Size: v.Size, Source: "library"})
+		case media.IsVideo(ext):
+			vids = append(vids, v)
+		}
+	}
+	for _, v := range vids {
+		rel := strings.TrimPrefix(v.CloudPath, root+"/")
+		parts := strings.Split(rel, "/")
+		info := media.Parse(parts[len(parts)-1])
+		f := LibFile{Path: v.CloudPath, Name: path.Base(v.CloudPath), MsgID: v.MsgID, Size: v.Size, Local: e.haveLocal(v), Added: v.UploadedAt}
+		f.Pos, f.Dur = e.Progress(v.CloudPath)
+		stem := strings.TrimSuffix(f.Name, path.Ext(f.Name))
+		for _, s := range subsOf[path.Dir(v.CloudPath)] {
+			if strings.HasPrefix(strings.TrimSuffix(s.Name, path.Ext(s.Name)), stem) {
+				f.Subs = append(f.Subs, s)
+			}
+		}
+		switch parts[0] {
+		case "Movies":
+			if len(parts) < 3 {
+				continue
+			}
+			folder := root + "/Movies/" + parts[1]
+			t := titles[key{"movie", folder}]
+			if t == nil {
+				mi := media.Parse(parts[1])
+				t = &LibTitle{Kind: "movie", Title: mi.Title, Year: mi.Year, Folder: folder}
+				if t.Title == "" {
+					t.Title = parts[1]
+				}
+				t.Norm = media.Norm(t.Title)
+				titles[key{"movie", folder}] = t
+			}
+			t.Files = append(t.Files, f)
+			t.Size += f.Size
+			t.Newest = max(t.Newest, v.UploadedAt)
+		case "Shows":
+			if len(parts) < 4 {
+				continue
+			}
+			folder := root + "/Shows/" + parts[1]
+			t := titles[key{"show", folder}]
+			if t == nil {
+				mi := media.Parse(parts[1])
+				t = &LibTitle{Kind: "show", Title: mi.Title, Year: mi.Year, Folder: folder}
+				if t.Title == "" {
+					t.Title = parts[1]
+				}
+				t.Norm = media.Norm(t.Title)
+				titles[key{"show", folder}] = t
+			}
+			f.Season, f.Episodes = info.Season, info.Episodes
+			if !info.HasSeason {
+				if m := parseSeasonDir(parts[2]); m >= 0 {
+					f.Season = m
+				}
+			}
+			if len(f.Episodes) == 0 {
+				continue
+			}
+			var sn *LibSeason
+			for i := range t.Seasons {
+				if t.Seasons[i].Number == f.Season {
+					sn = &t.Seasons[i]
+				}
+			}
+			if sn == nil {
+				t.Seasons = append(t.Seasons, LibSeason{Number: f.Season})
+				sn = &t.Seasons[len(t.Seasons)-1]
+			}
+			sn.Episodes = append(sn.Episodes, f)
+			t.Size += f.Size
+			t.Newest = max(t.Newest, v.UploadedAt)
+		}
+	}
+	out := make([]LibTitle, 0, len(titles))
+	for _, t := range titles {
+		sort.Slice(t.Files, func(i, j int) bool { return t.Files[i].Name < t.Files[j].Name })
+		sort.Slice(t.Seasons, func(i, j int) bool { return t.Seasons[i].Number < t.Seasons[j].Number })
+		for i := range t.Seasons {
+			eps := t.Seasons[i].Episodes
+			sort.Slice(eps, func(a, b int) bool { return eps[a].Episodes[0] < eps[b].Episodes[0] })
+		}
+		out = append(out, *t)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Kind != out[j].Kind {
+			return out[i].Kind < out[j].Kind
+		}
+		return strings.ToLower(out[i].Title) < strings.ToLower(out[j].Title)
+	})
+	return out, nil
+}
+
+func parseSeasonDir(name string) int {
+	f := strings.Fields(name)
+	if len(f) == 2 && strings.EqualFold(f[0], "season") {
+		if n, err := strconv.Atoi(f[1]); err == nil {
+			return n
+		}
+	}
+	return -1
+}
+
+// inLibrary reports whether a cloud path is inside the movie library.
+func (e *Engine) inMediaRoot(p string) bool { return underPrefix(p, e.MediaRoot()) }
+
+// DownloadMedia downloads library videos (each with the subtitles beside it)
+// to this device for watching offline.
+func (e *Engine) DownloadMedia(ctx context.Context, paths []string) (int64, error) {
+	root := e.MediaRoot()
+	byDest := map[string][]string{}
+	var order []string
+	add := func(p string) {
+		parent := path.Dir(p)
+		dest := filepath.Join(e.dataDir, "mb", filepath.FromSlash(strings.TrimPrefix(parent, root)))
+		if _, ok := byDest[dest]; !ok {
+			order = append(order, dest)
+		}
+		byDest[dest] = append(byDest[dest], p)
+	}
+	seen := map[string]bool{}
+	for _, p := range paths {
+		if !e.inMediaRoot(p) || p == root {
+			return 0, errors.New("that isn't in the library")
+		}
+		vs, err := e.st.LatestUnder(p)
+		if err != nil {
+			return 0, err
+		}
+		for _, v := range vs {
+			if seen[v.CloudPath] || e.haveLocal(v) {
+				continue
+			}
+			seen[v.CloudPath] = true
+			add(v.CloudPath)
+			// the subtitles that go with a video come along
+			if media.IsVideo(path.Ext(v.CloudPath)) {
+				stem := strings.TrimSuffix(path.Base(v.CloudPath), path.Ext(v.CloudPath))
+				sibs, _ := e.st.LatestUnder(path.Dir(v.CloudPath))
+				for _, s := range sibs {
+					if path.Dir(s.CloudPath) == path.Dir(v.CloudPath) && media.IsSubtitle(path.Ext(s.CloudPath)) &&
+						strings.HasPrefix(strings.TrimSuffix(path.Base(s.CloudPath), path.Ext(s.CloudPath)), stem) &&
+						!seen[s.CloudPath] && !e.haveLocal(s) {
+						seen[s.CloudPath] = true
+						add(s.CloudPath)
+					}
+				}
+			}
+		}
+	}
+	if len(order) == 0 {
+		return 0, errors.New("already on this phone")
+	}
+	// One task per destination folder would clutter the activity list, so run
+	// them one after another inside a single task by chaining.
+	var last int64
+	for _, dest := range order {
+		id, err := e.RestoreMany(ctx, byDest[dest], dest, "Downloading", nil)
+		if err != nil {
+			return last, err
+		}
+		last = id
+	}
+	return last, nil
+}
+
+// RemoveMedia deletes downloaded copies from this device (the library in
+// Telegram is untouched).
+func (e *Engine) RemoveMedia(paths []string) (int, error) {
+	root := e.MediaRoot()
+	n := 0
+	base := filepath.Join(e.dataDir, "mb")
+	for _, p := range paths {
+		if !e.inMediaRoot(p) || p == root {
+			return n, errors.New("that isn't in the library")
+		}
+		local := e.MediaLocal(p)
+		if !strings.HasPrefix(local, base+string(filepath.Separator)) {
+			continue
+		}
+		fi, err := os.Stat(local)
+		if err != nil {
+			continue
+		}
+		if fi.IsDir() {
+			if err := os.RemoveAll(local); err == nil {
+				n++
+			}
+		} else if err := os.Remove(local); err == nil {
+			n++
+		}
+		// tidy emptied folders up to the library's top
+		for d := filepath.Dir(local); strings.HasPrefix(d, base+string(filepath.Separator)); d = filepath.Dir(d) {
+			if os.Remove(d) != nil {
+				break
+			}
+		}
+	}
+	return n, nil
+}
+
+// ---- where I left off ----
+
+func progressKey(cloudPath string) string { return "mb.pos:" + cloudPath }
+
+// SetProgress remembers how far into a file playback got (milliseconds).
+func (e *Engine) SetProgress(cloudPath string, pos, dur int64) error {
+	if !e.inMediaRoot(cloudPath) {
+		return errors.New("that isn't in the library")
+	}
+	if pos < 0 || dur <= 0 {
+		return errors.New("bad position")
+	}
+	// within the last few percent counts as watched: start over next time
+	if pos > dur*95/100 || pos < 5000 {
+		return e.st.Set(progressKey(cloudPath), fmt.Sprintf("0/%d", dur))
+	}
+	return e.st.Set(progressKey(cloudPath), fmt.Sprintf("%d/%d", pos, dur))
+}
+
+// Progress returns the saved position and length of a file, 0 when unknown.
+func (e *Engine) Progress(cloudPath string) (pos, dur int64) {
+	f := strings.SplitN(e.st.Get(progressKey(cloudPath)), "/", 2)
+	if len(f) != 2 {
+		return 0, 0
+	}
+	pos, _ = strconv.ParseInt(f[0], 10, 64)
+	dur, _ = strconv.ParseInt(f[1], 10, 64)
+	return pos, dur
+}

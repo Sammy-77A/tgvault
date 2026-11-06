@@ -41,7 +41,14 @@ class MainActivity : Activity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (Core.library) {
+            // The movie app is dark from the first frame.
+            window.statusBarColor = 0xFF0C0E10.toInt()
+            window.navigationBarColor = 0xFF101316.toInt()
+            window.decorView.setBackgroundColor(0xFF0C0E10.toInt())
+        }
         web = WebView(this).apply {
+            if (Core.library) setBackgroundColor(0xFF0C0E10.toInt())
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             webViewClient = object : WebViewClient() {
@@ -104,7 +111,7 @@ class MainActivity : Activity() {
         // Pull down to check Telegram for files from your other devices.
         swipe = SwipeRefreshLayout(this).apply {
             addView(web)
-            setColorSchemeColors(0xFF2F6F5E.toInt())
+            setColorSchemeColors(if (Core.library) 0xFF22D07A.toInt() else 0xFF2F6F5E.toInt())
             setOnRefreshListener {
                 pageRefresh()
                 postDelayed({ isRefreshing = false }, 1500)
@@ -203,6 +210,10 @@ class MainActivity : Activity() {
                 }
             "play" -> url.getQueryParameter("u")?.let {
                 startActivity(Intent(this, PlayerActivity::class.java).putExtra("url", it))
+            }
+            // The movie app's player: the link is a playlist served by the Go side.
+            "mbplay" -> url.getQueryParameter("u")?.let {
+                startActivity(Intent(this, PlayerActivity::class.java).putExtra("plist", it))
             }
             "share-log" -> shareLog()
             "check-update" -> thread {

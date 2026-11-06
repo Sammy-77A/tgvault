@@ -48,6 +48,28 @@ var libraryRoutes = map[string]bool{
 	"POST /api/tasks/dismiss":   true, // /api/tasks/{id}/dismiss, see libraryRoute
 }
 
+// The movie app (the library app) also browses titles, asks for them, and
+// plays what it has downloaded. Each of these is checked in libraryGate.
+var movieRoutes = map[string]bool{
+	"GET /api/mb/info":        true,
+	"GET /api/mb/home":        true,
+	"GET /api/mb/browse":      true,
+	"GET /api/mb/search":      true,
+	"GET /api/mb/title":       true,
+	"GET /api/mb/season":      true,
+	"GET /api/mb/img":         true,
+	"POST /api/mb/request":    true,
+	"GET /api/mb/requests":    true,
+	"GET /api/mb/library":     true,
+	"POST /api/mb/download":   true,
+	"POST /api/mb/remove":     true,
+	"POST /api/mb/progress":   true,
+	"POST /api/mb/playlist":   true,
+	"GET /api/mb/subs/search": true,
+	"POST /api/mb/subs/get":   true,
+	"POST /api/mb/subs/key":   true,
+}
+
 // libraryRoute is the route's key in libraryRoutes.
 func libraryRoute(r *http.Request) string {
 	p := r.URL.Path
@@ -67,7 +89,7 @@ func (s *Server) libraryGate(w http.ResponseWriter, r *http.Request) bool {
 		fail(w, http.StatusForbidden, "this app only shows and downloads the shared folder")
 		return false
 	}
-	if !libraryRoutes[libraryRoute(r)] {
+	if !libraryRoutes[libraryRoute(r)] && !movieRoutes[libraryRoute(r)] {
 		fail(w, http.StatusForbidden, "this app only shows and downloads the shared folder")
 		return false
 	}

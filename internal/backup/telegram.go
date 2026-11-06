@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 
+	"github.com/Sammy-77A/tgvault/internal/store"
 	"github.com/Sammy-77A/tgvault/internal/tgclient"
 )
 
@@ -22,4 +23,15 @@ type telegram interface {
 	MessageLink(msgID int) string
 	ScanChannel(ctx context.Context, fn func(tgclient.RemoteFile) error) error
 	ScanSince(ctx context.Context, minID int, fn func(tgclient.RemoteFile) error) error
+}
+
+// Telegram is the connection an engine uploads to and reads from; the real
+// one is tgclient.Client.
+type Telegram = telegram
+
+// NewWith creates an engine on any Telegram connection (tests use an in-memory one).
+func NewWith(st *store.Store, tg Telegram, dataDir string) *Engine {
+	e := newEngine(st, dataDir)
+	e.tg = tg
+	return e
 }

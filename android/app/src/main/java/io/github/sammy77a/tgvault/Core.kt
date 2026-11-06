@@ -41,7 +41,10 @@ object Core {
         url?.let { return it }
         val app = ctx.applicationContext
         val storage = Environment.getExternalStorageDirectory().absolutePath
-        if (library) Mobile.setLibrary(BuildConfig.LIBRARY_FOLDER)
+        if (library) {
+            Mobile.setLibrary(BuildConfig.LIBRARY_FOLDER)
+            Mobile.setKeys(BuildConfig.TMDB_KEY, BuildConfig.SUBTITLE_KEY)
+        }
         val u = Mobile.start(dataDir(app), storage, AndroidHost(app))
         url = u
         Mobile.setForeground(foreground)

@@ -25,6 +25,7 @@ const playKeyLife = 6 * time.Hour
 type playKey struct {
 	msg     int
 	entry   string
+	local   string // a downloaded file on this device, instead of a stored one
 	expires time.Time
 }
 
@@ -51,6 +52,31 @@ func (p *playKeys) add(msg int, entry string) string {
 	}
 	p.m[key] = playKey{msg: msg, entry: entry, expires: now.Add(playKeyLife)}
 	return key
+}
+
+// addLocal makes a key for a file on this device (a downloaded movie).
+func (p *playKeys) addLocal(file string) string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	key := hex.EncodeToString(b)
+	now := time.Now()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.m == nil {
+		p.m = map[string]playKey{}
+	}
+	for k, v := range p.m {
+		if now.After(v.expires) {
+			delete(p.m, k)
+		}
+	}
+	p.m[key] = playKey{local: file, expires: now.Add(playKeyLife)}
+	return key
+}
+
+func loopback(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	return err == nil && net.ParseIP(host).IsLoopback()
 }
 
 func (p *playKeys) get(key string) (playKey, bool) {
@@ -84,6 +110,10 @@ func (s *Server) play(w http.ResponseWriter, r *http.Request) {
 	k, ok := s.plays.get(parts[0])
 	if !ok {
 		http.Error(w, "this link has expired", http.StatusNotFound)
+		return
+	}
+	if k.local != "" {
+		http.ServeFile(w, r, k.local) // handles ranges, so seeking works
 		return
 	}
 	v, err := s.eng.Version(k.msg)

@@ -70,7 +70,10 @@ type Engine struct {
 	moveMu sync.Mutex // one file at a time may take over a stored copy; see adoptMoved
 	// Scans hold it for reading; moving a file on disk and in the backup holds it
 	// for writing, so a scan never sees the file half-moved.
-	orgMu sync.RWMutex
+	orgMu    sync.RWMutex
+	movieDB  MovieDB
+	dataDir  string
+	readOnly bool // the library app: it may look, download and ask, never change the backup
 }
 
 // Progress of an item being uploaded.
@@ -105,6 +108,7 @@ func New(st *store.Store, tg *tgclient.Client, dataDir string) *Engine {
 func newEngine(st *store.Store, dataDir string) *Engine {
 	return &Engine{
 		st:          st,
+		dataDir:     dataDir,
 		splitAt:     meta.MaxFileSize,
 		partSize:    meta.SplitPartSize,
 		bigSlot:     make(chan struct{}, 1),

@@ -28,6 +28,7 @@ type fakeTG struct {
 	afterUpload  func(n int)
 	badDownloads map[int]int   // message ID -> how many downloads return corrupt data
 	editFails    map[int]error // message ID -> error from EditCaption
+	self         []selfMsg     // Saved Messages
 }
 
 type fakeMsg struct {

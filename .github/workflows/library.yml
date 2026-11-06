@@ -68,6 +68,8 @@ jobs:
           TGVAULT_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           TGVAULT_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           RUN: ${{ github.run_number }}
+          TMDB_KEY: ${{ secrets.TMDB_KEY }}
+          SUBTITLE_KEY: ${{ secrets.SUBTITLE_KEY }}
         run: |
           echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.p12"
           export TGVAULT_KEYSTORE="$RUNNER_TEMP/release.p12"
