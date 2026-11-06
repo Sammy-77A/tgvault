@@ -309,6 +309,20 @@ func pick(info media.Info, rs []tmdb.Result) (tmdb.Result, bool) {
 			exact = append(exact, r)
 		}
 	}
+	if info.Country != "" && len(exact) > 1 {
+		var byCountry []tmdb.Result
+		for _, r := range exact {
+			for _, c := range r.Countries {
+				if c == info.Country {
+					byCountry = append(byCountry, r)
+					break
+				}
+			}
+		}
+		if len(byCountry) > 0 {
+			exact = byCountry
+		}
+	}
 	if info.Year > 0 {
 		var byYear []tmdb.Result
 		for _, r := range exact {
@@ -321,8 +335,8 @@ func pick(info media.Info, rs []tmdb.Result) (tmdb.Result, bool) {
 	if len(exact) == 1 {
 		return exact[0], true
 	}
-	if len(exact) > 1 && info.Year > 0 {
-		// several with the same title and year: the famous one
+	if len(exact) > 1 && (info.Year > 0 || info.Country != "") {
+		// several with the same title and year (or country): the famous one
 		sort.SliceStable(exact, func(i, j int) bool { return exact[i].Popularity > exact[j].Popularity })
 		if exact[0].Popularity >= 3*exact[1].Popularity {
 			return exact[0], true
@@ -362,7 +376,7 @@ func (e *Engine) decide(ctx context.Context, lk *lookup, p string) decision {
 	var chosen tmdb.Result
 	sure := false
 	var cands []Candidate
-	if a, ok := e.st.MediaGetAlias(media.Norm(info.Title), kind); ok {
+	if a, ok := e.st.MediaGetAlias(aliasKey(info), kind); ok {
 		chosen, sure = tmdb.Result{ID: a.TMDBID, Title: a.Title, Year: a.Year, TV: tv}, true
 		if tv {
 			if rs, err := lk.show(ctx, info.Title, 0); err == nil {
@@ -424,6 +438,16 @@ func (e *Engine) decide(ctx context.Context, lk *lookup, p string) decision {
 	d.guess = g
 	d.to = destination(root, g, p)
 	return d
+}
+
+// aliasKey names what a file name says: the title, and the country tag when
+// there is one ("shameless|US" is not "shameless|GB").
+func aliasKey(info media.Info) string {
+	k := media.Norm(info.Title)
+	if info.Country != "" {
+		k += "|" + info.Country
+	}
+	return k
 }
 
 func kindWord(tv bool) string {
@@ -490,7 +514,7 @@ func (e *Engine) OrganizeMedia(ctx context.Context) (int64, error) {
 		return 0, err
 	}
 	if len(files) == 0 {
-		return 0, errors.New("nothing to sort: the library folder has no loose videos")
+		return 0, errors.New("nothing to sort: every video in the library folder is already filed")
 	}
 	t := e.newTask("organize", "Sorting movies and shows")
 	t.update(func(t *Task) { t.Total = len(files) })
@@ -586,7 +610,7 @@ func (e *Engine) ResolveMedia(ctx context.Context, cloudPath string, g Guess) er
 		if g.Kind == "episode" {
 			k = "tv"
 		}
-		_ = e.st.MediaSetAlias(store.MediaAlias{Norm: media.Norm(info.Title), Kind: k, TMDBID: g.TMDB, Title: g.Title, Year: g.Year})
+		_ = e.st.MediaSetAlias(store.MediaAlias{Norm: aliasKey(info), Kind: k, TMDBID: g.TMDB, Title: g.Title, Year: g.Year})
 	}
 	to := destination(e.MediaRoot(), g, cloudPath)
 	if to == cloudPath {
@@ -595,10 +619,48 @@ func (e *Engine) ResolveMedia(ctx context.Context, cloudPath string, g Guess) er
 	if vs, _ := e.st.Versions(to); len(vs) > 0 {
 		return errors.New("your library already has " + path.Base(to))
 	}
-	if _, err := e.relocate(ctx, "Filing "+path.Base(cloudPath), []relocation{{cloudPath, to}}); err != nil {
+	moves := []relocation{{cloudPath, to}}
+	taken := map[string]bool{to: true}
+	// Every other file waiting under the same name follows the same answer, so
+	// a whole season is one decision, not one per episode.
+	if notes, err := e.st.MediaNotes("review"); err == nil && g.TMDB > 0 && info.Title != "" {
+		for _, n := range notes {
+			if n.CloudPath == cloudPath {
+				continue
+			}
+			oi := media.ParseIn(strings.TrimPrefix(n.CloudPath, e.MediaRoot()+"/"))
+			if aliasKey(oi) != aliasKey(info) || (oi.Kind == media.Episode) != (g.Kind == "episode") {
+				continue
+			}
+			og := g
+			if g.Kind == "episode" {
+				if !oi.HasSeason || len(oi.Episodes) == 0 {
+					continue
+				}
+				og.Season, og.Episodes = oi.Season, oi.Episodes
+			}
+			dst := destination(e.MediaRoot(), og, n.CloudPath)
+			if dst == n.CloudPath || taken[dst] {
+				continue
+			}
+			if vs, _ := e.st.Versions(dst); len(vs) > 0 {
+				continue
+			}
+			taken[dst] = true
+			moves = append(moves, relocation{n.CloudPath, dst})
+		}
+	}
+	title := "Filing " + path.Base(cloudPath)
+	if len(moves) > 1 {
+		title = fmt.Sprintf("Filing %d files as %s", len(moves), g.Title)
+	}
+	if _, err := e.relocate(ctx, title, moves); err != nil {
 		return err
 	}
-	return e.st.MediaDrop(cloudPath)
+	for _, m := range moves {
+		_ = e.st.MediaDrop(m.from)
+	}
+	return nil
 }
 
 // SkipMedia tells the organizer to leave a file where it is.

@@ -41,6 +41,7 @@ type Result struct {
 	Popularity float64
 	Poster     string
 	TV         bool
+	Countries  []string // where a show comes from ("US", "GB"); empty for movies
 }
 
 // Season is a season of a show and how many episodes TMDB lists for it.
@@ -134,13 +135,14 @@ func year(date string) int {
 
 type searchResp struct {
 	Results []struct {
-		ID         int     `json:"id"`
-		Title      string  `json:"title"`
-		Name       string  `json:"name"`
-		Release    string  `json:"release_date"`
-		First      string  `json:"first_air_date"`
-		Popularity float64 `json:"popularity"`
-		Poster     string  `json:"poster_path"`
+		ID         int      `json:"id"`
+		Title      string   `json:"title"`
+		Name       string   `json:"name"`
+		Release    string   `json:"release_date"`
+		First      string   `json:"first_air_date"`
+		Popularity float64  `json:"popularity"`
+		Poster     string   `json:"poster_path"`
+		Countries  []string `json:"origin_country"`
 	} `json:"results"`
 }
 
@@ -163,7 +165,7 @@ func (c *Client) search(ctx context.Context, kind, title string, yr int) ([]Resu
 		if kind == "tv" {
 			t, d = x.Name, x.First
 		}
-		out = append(out, Result{ID: x.ID, Title: t, Year: year(d), Popularity: x.Popularity, Poster: x.Poster, TV: kind == "tv"})
+		out = append(out, Result{ID: x.ID, Title: t, Year: year(d), Popularity: x.Popularity, Poster: x.Poster, TV: kind == "tv", Countries: x.Countries})
 	}
 	return out, nil
 }

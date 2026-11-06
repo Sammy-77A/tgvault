@@ -47,8 +47,8 @@ func (f *fakeDB) SearchTV(_ context.Context, title string, year int) ([]tmdb.Res
 		return []tmdb.Result{{ID: 61889, Title: "Marvel's Jessica Jones", Year: 2015, Popularity: 60, TV: true}}, nil
 	case "shameless":
 		return []tmdb.Result{
-			{ID: 34307, Title: "Shameless", Year: 2011, Popularity: 90, TV: true},
-			{ID: 2200, Title: "Shameless", Year: 2004, Popularity: 30, TV: true},
+			{ID: 34307, Title: "Shameless", Year: 2011, Popularity: 90, TV: true, Countries: []string{"US"}},
+			{ID: 2200, Title: "Shameless", Year: 2004, Popularity: 30, TV: true, Countries: []string{"GB"}},
 		}, nil
 	}
 	return nil, nil
@@ -147,7 +147,10 @@ func TestOneAnswerSettlesEveryFileWithThatName(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitTasks(t, e)
-	// the second episode now follows the same answer without asking
+	// the other episode waiting under the same name follows at once, no second sort needed
+	if !exists(filepath.Join(lib, "Shows", "Shameless (2011)", "Season 01", "Shameless - S01E02.mkv")) {
+		t.Error("one answer should file every episode waiting under that name")
+	}
 	organize(t, e)
 	for _, p := range []string{
 		"Shows/Shameless (2011)/Season 01/Shameless - S01E01.mkv",
@@ -399,4 +402,54 @@ func canceled() context.Context {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	return ctx
+}
+
+func TestCountryTagPicksTheRightShowWithoutAsking(t *testing.T) {
+	e, st, _, root, dir := moveRig(t)
+	st.Set(SettingMediaRoot, "R/tgmoviebox")
+	e.SetMovieDB(&fakeDB{})
+	lib := filepath.Join(dir, "tgmoviebox")
+	write(t, filepath.Join(lib, "Shameless US S08E01 720p BluRay x265-HETeam .mkv"), "a")
+	write(t, filepath.Join(lib, "Shameless UK S02E01 720p.mkv"), "b")
+	syncAll(t, e, st, root)
+	organize(t, e)
+	waitTasks(t, e)
+	if !exists(filepath.Join(lib, "Shows", "Shameless (2011)", "Season 08", "Shameless - S08E01.mkv")) {
+		t.Error("US means the 2011 show")
+	}
+	if !exists(filepath.Join(lib, "Shows", "Shameless (2004)", "Season 02", "Shameless - S02E01.mkv")) {
+		t.Error("UK means the 2004 show")
+	}
+	if rv, _ := e.Review(); len(rv) != 0 {
+		t.Errorf("nothing to ask: %+v", rv)
+	}
+}
+
+func TestFilesPutInPlaceByHandStillShowUp(t *testing.T) {
+	e, st, _, root, dir := moveRig(t)
+	st.Set(SettingMediaRoot, "R/tgmoviebox")
+	lib := filepath.Join(dir, "tgmoviebox")
+	write(t, filepath.Join(lib, "Movies", "Heat.1995.1080p.mkv"), "heat")                   // straight in Movies
+	write(t, filepath.Join(lib, "Movies", "Up (2009)", "Up (2009).mkv"), "up")              // the tidy way
+	write(t, filepath.Join(lib, "Shows", "Dexter", "Dexter.S01E01.mkv"), "d1")              // no season folder
+	write(t, filepath.Join(lib, "Shows", "Dexter", "Season 02", "Dexter.S02E01.mkv"), "d2") // with one
+	syncAll(t, e, st, root)
+	lib2, err := e.Library()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]LibTitle{}
+	for _, tl := range lib2 {
+		got[tl.Title] = tl
+	}
+	if h := got["Heat"]; h.Kind != "movie" || h.Year != 1995 || len(h.Files) != 1 {
+		t.Errorf("Heat: %+v", h)
+	}
+	if u := got["Up"]; len(u.Files) != 1 {
+		t.Errorf("Up: %+v", u)
+	}
+	d := got["Dexter"]
+	if d.Kind != "show" || len(d.Seasons) != 2 || d.Seasons[0].Number != 1 || d.Seasons[1].Number != 2 {
+		t.Errorf("Dexter should have seasons 1 and 2: %+v", d)
+	}
 }

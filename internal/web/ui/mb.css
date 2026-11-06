@@ -183,3 +183,6 @@ body.mb-on .jump { display: none !important; }
 .mb-top.over.solid { background: var(--mb-bg); border-bottom: 1px solid var(--mb-line); }
 
 .mb-storage { display: flex; justify-content: space-between; align-items: center; gap: .6rem; margin-bottom: .9rem; color: var(--mb-muted); font-size: .9rem; }
+
+.mb-librarypage .mb-searchpage { padding-bottom: .4rem; }
+.mb-more-hint { text-align: center; padding: 1rem; }

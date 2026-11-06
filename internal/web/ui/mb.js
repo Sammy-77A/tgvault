@@ -171,12 +171,22 @@ screens.home = async () => {
       el("button", { type: "button", onclick: () => mbRender() }, "Try again"));
   }
   const hero = (h.rows[0] ? h.rows[0].items : []).find((i) => i.backdrop);
+  let added = null;
+  try {
+    const l = await api("/api/mb/library");
+    const recent = [...l.titles].sort((a, b) => (b.newest || 0) - (a.newest || 0)).slice(0, 14);
+    if (recent.length) {
+      added = el("section", { class: "mb-row" },
+        el("div", { class: "mb-row-head" }, el("h2", {}, "In the library"), el("button", { type: "button", class: "mb-link", onclick: () => mbTab("library") }, "See all")),
+        el("div", { class: "mb-scroller" }, recent.map(libCard)));
+    }
+  } catch { /* offline or empty: the TMDB rows still show */ }
   const chips = el("div", { class: "mb-chips" },
     el("button", { type: "button", class: "mb-chip active" }, "All"),
     el("button", { type: "button", class: "mb-chip", onclick: () => mbGo("browse", { kind: "movie" }) }, "Movies"),
     el("button", { type: "button", class: "mb-chip", onclick: () => mbGo("browse", { kind: "show" }) }, "TV shows"));
   return el("div", { class: "mb-home" }, chips,
-    hero ? heroCard(hero) : null,
+    hero ? heroCard(hero) : null, added,
     h.rows.map((r) => row(r.title, r.items, r.key === "trending" ? null : () => mbGo("browse", { kind: r.key.includes("shows") ? "show" : "movie" }))));
 };
 
@@ -501,13 +511,7 @@ const STATE_TEXT = { requested: "Waiting", fulfilled: "Added", declined: "Not av
 screens.downloads = async () => {
   const [lib, rq] = await Promise.all([api("/api/mb/library"), api("/api/mb/requests").catch(() => ({ requests: [] }))]);
   const titles = lib.titles;
-  const filter = MB.dlFilter || "all";
-  const want = (t) => filter === "all" || (filter === "phone" ? t.local > 0 : t.local < t.total);
   const fileOf = (t) => (t.kind === "movie" ? t.files : t.seasons.flatMap((s) => s.episodes));
-
-  const chips = el("div", { class: "mb-chips" }, [["all", "All"], ["phone", "On this phone"], ["cloud", "Not downloaded"]].map(([k, label]) =>
-    el("button", { type: "button", class: "mb-chip" + (k === filter ? " active" : ""), onclick: () => { MB.dlFilter = k; mbRender(true); } }, label)));
-
   // continue watching: started and not finished
   const started = [];
   for (const t of titles) for (const f of fileOf(t)) if (f.local && f.pos > 0) started.push({ t, f });
@@ -537,19 +541,62 @@ screens.downloads = async () => {
         el("div", { class: "mb-req-main" }, el("strong", {}, r.title, r.year ? ` (${r.year})` : ""), el("div", { class: "mb-card-sub" }, what, " · asked ", when(r.at)), status));
     })) : null;
 
-  const movies = titles.filter((t) => t.kind === "movie" && want(t));
-  const shows = titles.filter((t) => t.kind === "show" && want(t));
-  const libCard = (t) => {
-    const mark = t.local === t.total ? pill("On phone", "ok") : t.local ? pill(`${t.local}/${t.total} on phone`, "ok") : pill("Download", "info");
-    return el("button", { type: "button", class: "mb-card", onclick: () => mbGo("details", { kind: t.kind, id: t.tmdb || 0, lib: t }) },
-      el("div", { class: "mb-poster" }, mbImg(t.poster, "w342", t.title), mark),
-      el("div", { class: "mb-card-title" }, t.title), el("div", { class: "mb-card-sub" }, [t.year || "", t.kind === "show" ? `${t.seasons.length} season${t.seasons.length === 1 ? "" : "s"}` : bytes(t.size)].filter(Boolean).join(" · ")));
-  };
-  const empty = !titles.length ? el("div", { class: "mb-empty" }, icon("film"), el("p", {}, "Nothing here yet."), el("p", { class: "mb-hint" }, "Request a movie or show from Home. When the owner adds it, it appears here to download and watch offline.")) : null;
-  return el("div", { class: "mb-downloads" }, chips, cont, reqs,
-    movies.length ? el("section", {}, el("h2", {}, "Movies"), el("div", { class: "mb-grid" }, movies.map(libCard))) : null,
-    shows.length ? el("section", {}, el("h2", {}, "TV shows"), el("div", { class: "mb-grid" }, shows.map(libCard))) : null,
-    !movies.length && !shows.length && titles.length ? el("p", { class: "mb-hint" }, "Nothing matches that filter.") : null, empty);
+  const onPhone = titles.filter((t) => t.local > 0);
+  const movies = onPhone.filter((t) => t.kind === "movie");
+  const shows = onPhone.filter((t) => t.kind === "show");
+  const empty = !onPhone.length && !started.length && !mine.length ? el("div", { class: "mb-empty" }, icon("film"), el("p", {}, "Nothing on this phone yet."),
+    el("p", { class: "mb-hint" }, "Everything the owner has added is in the Library tab. Download something there and it shows up here, ready to watch offline."),
+    el("button", { type: "button", class: "mb-primary", onclick: () => mbTab("library") }, "Open the library")) : null;
+  return el("div", { class: "mb-downloads" }, cont, reqs,
+    movies.length ? el("section", {}, el("h2", {}, "Movies on this phone"), el("div", { class: "mb-grid" }, movies.map(libCard))) : null,
+    shows.length ? el("section", {}, el("h2", {}, "TV shows on this phone"), el("div", { class: "mb-grid" }, shows.map(libCard))) : null,
+    onPhone.length ? el("p", { class: "mb-hint mb-more-hint" }, "Looking for something else? ", el("button", { type: "button", class: "mb-link", onclick: () => mbTab("library") }, "Open the library")) : null,
+    empty);
+};
+
+// A library title as a card: what's on the phone, or that it can be downloaded.
+function libCard(t) {
+  const mark = t.local === t.total ? pill("On phone", "ok") : t.local ? pill(`${t.local}/${t.total} on phone`, "ok") : pill("Download", "info");
+  return el("button", { type: "button", class: "mb-card", onclick: () => mbGo("details", { kind: t.kind, id: t.tmdb || 0, lib: t }) },
+    el("div", { class: "mb-poster" }, mbImg(t.poster, "w342", t.title), mark),
+    el("div", { class: "mb-card-title" }, t.title),
+    el("div", { class: "mb-card-sub" }, [t.year || "", t.kind === "show" ? `${t.seasons.length} season${t.seasons.length === 1 ? "" : "s"}` : bytes(t.size)].filter(Boolean).join(" · ")));
+}
+
+// ---------- Library: everything the owner has filed, requested or not ----------
+
+screens.library = async ({ q = "", kind = "all" }) => {
+  const lib = await api("/api/mb/library");
+  const titles = lib.titles;
+  const out = el("div", { class: "mb-libgrid" });
+  const status = el("p", { class: "mb-hint" });
+  const input = el("input", { type: "search", class: "mb-search", placeholder: `Search the library (${titles.length})`, value: q, autocomplete: "off" });
+  const chips = el("div", { class: "mb-chips" });
+  let current = kind;
+  function draw() {
+    const text = norm(input.value);
+    const view = MB.stack[MB.stack.length - 1];
+    view.params = { q: input.value, kind: current };
+    for (const c of chips.children) c.classList.toggle("active", c.dataset.k === current);
+    const list = titles.filter((t) => (current === "all" || t.kind === current) && (!text || norm(t.title).includes(text)));
+    const movies = list.filter((t) => t.kind === "movie"), shows = list.filter((t) => t.kind === "show");
+    out.replaceChildren(
+      movies.length ? el("section", {}, el("h2", {}, `Movies (${movies.length})`), el("div", { class: "mb-grid" }, movies.map(libCard))) : null,
+      shows.length ? el("section", {}, el("h2", {}, `TV shows (${shows.length})`), el("div", { class: "mb-grid" }, shows.map(libCard))) : null);
+    status.textContent = list.length ? "" : titles.length ? "Nothing matches." : "";
+  }
+  for (const [k, label] of [["all", "All"], ["movie", "Movies"], ["show", "TV shows"]]) {
+    chips.append(el("button", { type: "button", "data-k": k, class: "mb-chip", onclick: () => { current = k; draw(); } }, label));
+  }
+  input.addEventListener("input", draw);
+  const wrap = el("div", { class: "mb-librarypage" }, el("div", { class: "mb-searchpage" }, input), chips, status, out);
+  if (!titles.length) {
+    return el("div", { class: "mb-empty" }, icon("film"), el("p", {}, "The library is empty."),
+      el("p", { class: "mb-hint" }, "When the owner adds movies and shows, they appear here. You can also ask for something from Home."),
+      el("button", { type: "button", class: "mb-primary", onclick: () => mbTab("home") }, "Browse Home"));
+  }
+  draw();
+  return wrap;
 };
 
 const seasonFromPath = (p) => { const m = /Season (\d+)/.exec(p); return m ? Number(m[1]) : 1; };

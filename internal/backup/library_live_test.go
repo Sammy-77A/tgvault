@@ -26,6 +26,8 @@ func TestLiveTMDBMatches(t *testing.T) {
 		{"Bride.of.Chucky.1998.1080p.BluRay.x264.YIFY.[@MzoneChat].srt", root + "/Movies/Bride of Chucky (1998)/Bride of Chucky (1998).srt"},
 		{"Dexter_Resurrection_S02E01_1080p_10bit_WEBRip_6CH_x265_HEVC_PSA.mkv", ""},
 		{"Good.Omens.S03E01.1080p.mkv", ""},
+		{"Shameless US S08E01 720p BluRay x265-HETeam .mkv", root + "/Shows/Shameless (2011)/Season 08/Shameless - S08E01.mkv"},
+		{"Smallville S06E10 Hydro.mkv", root + "/Shows/Smallville/Season 06/Smallville - S06E10.mkv"},
 		{"Up (2009).mkv", root + "/Movies/Up (2009)/Up (2009).mkv"},
 	}
 	for _, c := range cases {

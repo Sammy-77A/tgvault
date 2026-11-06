@@ -126,13 +126,18 @@ func (e *Engine) Library() ([]LibTitle, error) {
 		}
 		switch parts[0] {
 		case "Movies":
-			if len(parts) < 3 {
+			// Movies/Title (Year)/file, or just Movies/file when filed by hand
+			if len(parts) < 2 {
 				continue
 			}
 			folder := root + "/Movies/" + parts[1]
 			t := titles[key{"movie", folder}]
 			if t == nil {
 				mi := media.Parse(parts[1])
+				if len(parts) == 2 {
+					mi.Title = info.Title
+					mi.Year = info.Year
+				}
 				t = &LibTitle{Kind: "movie", Title: mi.Title, Year: mi.Year, Folder: folder}
 				if t.Title == "" {
 					t.Title = parts[1]
@@ -144,7 +149,8 @@ func (e *Engine) Library() ([]LibTitle, error) {
 			t.Size += f.Size
 			t.Newest = max(t.Newest, v.UploadedAt)
 		case "Shows":
-			if len(parts) < 4 {
+			// Shows/Title/Season 01/file, or Shows/Title/file with the season in the name
+			if len(parts) < 3 {
 				continue
 			}
 			folder := root + "/Shows/" + parts[1]
@@ -159,7 +165,7 @@ func (e *Engine) Library() ([]LibTitle, error) {
 				titles[key{"show", folder}] = t
 			}
 			f.Season, f.Episodes = info.Season, info.Episodes
-			if !info.HasSeason {
+			if !info.HasSeason && len(parts) >= 4 {
 				if m := parseSeasonDir(parts[2]); m >= 0 {
 					f.Season = m
 				}

@@ -25,12 +25,12 @@ func TestParseNames(t *testing.T) {
 		{"Up (2009).mkv", Movie, "Up", 2009, 0, nil, false},
 		{"Up.2009.1080p.BluRay.x264.mkv", Movie, "Up", 2009, 0, nil, false},
 		{"2012.2009.1080p.BluRay.mkv", Movie, "2012", 2009, 0, nil, false},
-		{"Shameless.US.S11E12.720p.WEB.mkv", Episode, "Shameless US", 0, 11, []int{12}, false},
+		{"Shameless.US.S11E12.720p.WEB.mkv", Episode, "Shameless", 0, 11, []int{12}, false},
 		{"Show.Name.S01E01E02.720p.mkv", Episode, "Show Name", 0, 1, []int{1, 2}, false},
 		{"Show.Name.S01E01-E03.720p.mkv", Episode, "Show Name", 0, 1, []int{1, 2, 3}, false},
 		{"Show Name 1x05 Title.mkv", Episode, "Show Name", 0, 1, []int{5}, false},
 		{"Show Name Season 2 Episode 7.mkv", Episode, "Show Name", 0, 2, []int{7}, false},
-		{"the.office.us.s02e03.720p.hdtv.x264.mkv", Episode, "the office us", 0, 2, []int{3}, false},
+		{"the.office.us.s02e03.720p.hdtv.x264.mkv", Episode, "the office", 0, 2, []int{3}, false},
 		{"Blade.Runner.2049.2017.2160p.UHD.BluRay.x265.mkv", Movie, "Blade Runner 2049", 2017, 0, nil, false},
 	}
 	for _, c := range cases {
@@ -41,6 +41,19 @@ func TestParseNames(t *testing.T) {
 				c.name, in.Kind, in.Title, in.Year, in.Season, in.Episodes, in.Subtitle,
 				c.kind, c.title, c.year, c.season, c.eps, c.subtitl)
 		}
+	}
+}
+
+func TestCountryTagComesOffTheTitle(t *testing.T) {
+	in := Parse("Shameless US S08E01 720p BluRay x265-HETeam .mkv")
+	if in.Title != "Shameless" || in.Country != "US" || in.Season != 8 {
+		t.Errorf("%+v", in)
+	}
+	if got := Parse("Skins.UK.S01E01.mkv"); got.Country != "GB" || got.Title != "Skins" {
+		t.Errorf("UK means GB at TMDB: %+v", got)
+	}
+	if got := Parse("Us.2019.1080p.mkv"); got.Title != "Us" || got.Country != "" {
+		t.Errorf("a title that is only the tag stays: %+v", got)
 	}
 }
 

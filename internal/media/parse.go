@@ -41,6 +41,9 @@ type Info struct {
 	// from very little text, so the caller should not trust it blindly.
 	Weak      bool
 	HasSeason bool
+	// Country is a trailing "US" or "UK" in the title ("Shameless US"), taken
+	// off the title: it says which of several shows with that name is meant.
+	Country string
 }
 
 var videoExt = map[string]bool{".mkv": true, ".mp4": true, ".avi": true, ".mov": true, ".m4v": true,
@@ -81,6 +84,10 @@ var noise = map[string]bool{
 	"repack": true, "proper": true, "unrated": true, "remastered": true, "extended": true, "directors": true,
 	"hdr": true, "hdr10": true, "dv": true, "imax": true, "multi": true, "dual": true, "subbed": true, "dubbed": true,
 }
+
+// countries are the tags release names put after a show's title, with the
+// code TMDB uses for that country.
+var countries = map[string]string{"us": "US", "uk": "GB", "gb": "GB", "au": "AU", "nz": "NZ", "ca": "CA"}
 
 // Parse reads one file name (no folders). Use ParseIn when the folders it sits
 // in may help.
@@ -141,6 +148,12 @@ func Parse(name string) Info {
 	}
 	title = strings.Trim(title, " -")
 	in.Title = reSpace.ReplaceAllString(title, " ")
+	if f := strings.Fields(in.Title); len(f) > 1 {
+		if c, ok := countries[strings.ToLower(f[len(f)-1])]; ok {
+			in.Country = c
+			in.Title = strings.Join(f[:len(f)-1], " ")
+		}
+	}
 	in.Year = year
 	if in.Kind != Episode && in.Title != "" && !in.Subtitle {
 		in.Kind = Movie
