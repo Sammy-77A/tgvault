@@ -1,5 +1,6 @@
 package io.github.sammy77a.tgvault
 
+import android.app.AlarmManager
 import android.app.Notification
 import android.app.PendingIntent
 import android.app.Service
@@ -27,6 +28,7 @@ class DownloadService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        alive = true
         Notifications.createChannels(this)
     }
 
@@ -64,6 +66,8 @@ class DownloadService : Service() {
                 if (++idle >= 4) break
             } else {
                 idle = 0
+                // If Android ends the app for memory, this alarm brings the downloads back.
+                markActive(applicationContext, true)
                 val size = j.optLong("size")
                 val done = j.optLong("done")
                 val pct = if (size > 0) (done * 100 / size).toInt().coerceIn(0, 100) else 0
@@ -88,6 +92,7 @@ class DownloadService : Service() {
             Thread.sleep(1000)
         }
         running = false
+        markActive(applicationContext, false)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -117,16 +122,64 @@ class DownloadService : Service() {
     }
 
     override fun onDestroy() {
+        alive = false
         running = false
         super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        // swiped away from the recent apps: keep going, and make sure of it
+        if (running) armRevive(applicationContext, 5_000)
+        super.onTaskRemoved(rootIntent)
+    }
+
     companion object {
         private const val TAG = "tgvault"
         const val ACTION_PAUSE = "tgvault.download.pause"
         const val ACTION_CANCEL = "tgvault.download.cancel"
+
+        const val ACTION_REVIVE = "tgvault.download.revive"
+        private const val PREFS = "dlservice"
+        private const val CHECK_EVERY_MS = 60_000L
+
+        /** Remembers whether downloads are running, and keeps an alarm set while they are. */
+        fun markActive(ctx: Context, active: Boolean) {
+            val now = System.currentTimeMillis()
+            if (active && now - lastArm < 30_000L) return // the loop calls this every second
+            lastArm = now
+            ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("active", active).apply()
+            if (active) armRevive(ctx, CHECK_EVERY_MS) else disarmRevive(ctx)
+        }
+
+        @Volatile var alive = false
+        @Volatile private var lastArm = 0L
+
+        fun wasActive(ctx: Context): Boolean = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("active", false)
+
+        private fun revivePending(ctx: Context): PendingIntent = PendingIntent.getBroadcast(
+            ctx, 77, Intent(ctx, ReviveReceiver::class.java).setAction(ACTION_REVIVE),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+
+        /**
+         * An alarm that wakes the app if it has been ended for memory (a game can force that);
+         * an alarm may start the service when the app is in the background.
+         */
+        fun armRevive(ctx: Context, inMs: Long) {
+            val am = ctx.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+            val at = System.currentTimeMillis() + inMs
+            try {
+                am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, revivePending(ctx))
+            } catch (e: SecurityException) {
+                am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, revivePending(ctx))
+            }
+        }
+
+        private fun disarmRevive(ctx: Context) {
+            (ctx.getSystemService(Context.ALARM_SERVICE) as AlarmManager).cancel(revivePending(ctx))
+        }
 
         /** Starts the service; quietly does nothing if Android doesn't allow it now. */
         fun start(ctx: Context) {
