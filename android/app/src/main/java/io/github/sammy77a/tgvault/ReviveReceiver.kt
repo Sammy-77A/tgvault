@@ -5,6 +5,8 @@ import android.content.Context
 import android.content.Intent
 import android.util.Log
 import kotlin.concurrent.thread
+import mobile.Mobile
+import org.json.JSONObject
 
 /**
  * Puts the background backup schedule back after the phone restarts or the app
@@ -32,6 +34,12 @@ class ReviveReceiver : BroadcastReceiver() {
                 try {
                     Core.start(context.applicationContext)
                     DownloadService.start(context.applicationContext)
+                    // Android refuses a foreground service started from here after an update, but
+                    // allows one started by an exact alarm: if downloads are waiting, set one.
+                    if (JSONObject(Mobile.downloadStatus()).optBoolean("active")) {
+                        DownloadService.markActive(context.applicationContext, true)
+                        DownloadService.armRevive(context.applicationContext, 3_000)
+                    }
                 } catch (e: Exception) {
                     Log.e("tgvault", "couldn't resume the downloads", e)
                 } finally {

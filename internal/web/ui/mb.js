@@ -547,7 +547,23 @@ async function downloadFiles(paths, label) {
     location.href = "tgvault://dlservice"; // keeps the download going with the app closed
     await mbPollDownloads(true);
     mbRefreshCurrent();
+    mbAskBackground();
   } catch (e) { toast(e.message); }
+}
+
+// Phones, Infinix and Tecno ones especially, end apps that aren't allowed to run in the
+// background, and don't start them again after an update. Ask once, with the reason.
+const backgroundAllowed = () => !state || !state.phone || !state.phone.permissions || state.phone.permissions.battery !== false;
+async function mbAskBackground() {
+  if (backgroundAllowed()) return;
+  try { if (localStorage.getItem("mb.bgAsked")) return; localStorage.setItem("mb.bgAsked", "1"); } catch { /* private mode: ask each time */ }
+  const ok = await dialog({
+    title: "Keep downloads going?",
+    body: el("p", {}, "Your phone may stop this app when you leave it, and it won't start again by itself after an update, so a download can sit unfinished until you open the app. Allowing it to run in the background prevents that. Android will ask you to confirm."),
+    buttons: [{ label: "Not now", value: null }, { label: "Allow", value: "go", primary: true }],
+    run: async () => {},
+  });
+  if (ok) location.href = "tgvault://perm/battery";
 }
 
 const dlControl = (action, path) => api("/api/mb/download-action", { action, path }).then(() => mbPollDownloads(true)).then(() => mbRefreshCurrent()).catch((e) => toast(e.message));
@@ -733,6 +749,9 @@ async function mbSettings() {
       el("div", { class: "mb-storage" },
         el("span", {}, info.used ? `Downloads on this phone: ${bytes(info.used)}` : "No downloads on this phone."),
         el("button", { type: "button", class: "mb-link", onclick: () => { $("dlg").close(); setTimeout(mbStorage, 50); } }, "Storage and space")),
+      backgroundAllowed() ? null : el("div", { class: "mb-storage" },
+        el("span", {}, "Background downloads are limited: your phone may stop them when you leave the app."),
+        el("a", { href: "tgvault://perm/battery", class: "mb-link" }, "Allow")),
       el("div", { class: "mb-set-links" },
         el("a", { href: "tgvault://check-update" }, "Check for an update"),
         el("a", { href: "tgvault://share-log" }, "Share the log")),
