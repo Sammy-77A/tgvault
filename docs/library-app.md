@@ -29,8 +29,12 @@ itself.
   previewing, playing and downloading files **inside that folder**, so the limit
   doesn't depend on which buttons the page shows. Its Telegram connection is also
   read-only: uploads, deletes and caption edits all fail.
-- It does no background work (no backups, watcher, boot receiver or update checks).
-  Send a new APK by hand to update it.
+- It does no backups or file watching. It does keep downloads going while the
+  app is closed (a foreground service, brought back by an alarm if Android ends the app
+  for memory), and it checks the `android-library` release about once a day when opened:
+  a notice says an update is ready, and tapping it downloads the APK and opens Android's
+  installer (one confirm tap; the first time Android also asks to allow installs from the
+  app). Updates install over the old app, so downloads and the sign-in are kept.
 
 ## Signing in
 
@@ -40,3 +44,15 @@ person enters your phone number and you read them the code Telegram sends to you
 own Telegram (or they show the QR code and you scan it with Telegram → Settings →
 Devices → Link Desktop Device). If you use a cloud password, they need it too.
 You can end the session at any time in Telegram → Settings → Devices.
+
+## Sharing it
+
+Send the install link above. The person installs it, opens it and signs in as described
+above. A normal tgvault already signed in on their phone does not carry over: the two apps
+keep separate data, so the movie app signs in once more (a second device in Telegram →
+Settings → Devices). Requests are texts in your Saved Messages, so you and anyone signed in
+as you see the same list of requests; watching progress and downloads are per phone.
+
+Downloads can be kept on the phone or an SD card (Settings → Storage and space, which also
+frees space). Files on an SD card are in `Android/data/<package>/files/tgmoviebox`, which
+Android hides from file managers.
