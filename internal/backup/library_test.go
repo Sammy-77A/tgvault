@@ -669,3 +669,94 @@ func TestLibraryFollowsAFileTheOwnerFiledAfterItArrived(t *testing.T) {
 		t.Errorf("both episodes should be listed under the show: %+v", lib)
 	}
 }
+
+func TestFinishedDownloadsAreMovedIntoTheLibraryFolderAndOnlyThose(t *testing.T) {
+	old := stableAfter
+	stableAfter = 0
+	defer func() { stableAfter = old }()
+	e, _, _, lib, _ := autoRig(t)
+	td := filepath.Dir(lib) // the Telegram Desktop folder, which holds the library folder
+	write(t, filepath.Join(td, "Up.2009.1080p.BluRay.x264.mkv"), "up")
+	write(t, filepath.Join(td, "Up.2009.1080p.BluRay.x264.en.srt"), "1\n00:00:01,000 --> 00:00:02,000\nHi\n")
+	write(t, filepath.Join(td, "Shameless.S11E02.720p.mkv"), "s")
+	write(t, filepath.Join(td, "holiday clip.mp4"), "h")           // not obviously a movie or show
+	write(t, filepath.Join(td, "VID_20261107_101500.mp4"), "v")    // a camera clip
+	write(t, filepath.Join(td, "notes.txt"), "n")                   // not a video
+	write(t, filepath.Join(td, "Heat.1995.mkv"), "heat")            // the library folder already has one
+	write(t, filepath.Join(lib, "Heat.1995.mkv"), "heat in lib")
+	write(t, filepath.Join(td, "Other", "Show.S01E01.mkv"), "deep") // in a subfolder: left alone
+	if n := e.CollectDownloads(); n != 2 {
+		t.Fatalf("two releases should be collected, got %d", n)
+	}
+	for _, f := range []string{"Up.2009.1080p.BluRay.x264.mkv", "Up.2009.1080p.BluRay.x264.en.srt", "Shameless.S11E02.720p.mkv"} {
+		if !exists(filepath.Join(lib, f)) || exists(filepath.Join(td, f)) {
+			t.Errorf("%s should have moved into the library folder", f)
+		}
+	}
+	for _, f := range []string{"holiday clip.mp4", "VID_20261107_101500.mp4", "notes.txt", "Heat.1995.mkv", filepath.Join("Other", "Show.S01E01.mkv")} {
+		if !exists(filepath.Join(td, f)) {
+			t.Errorf("%s is not ours to move", f)
+		}
+	}
+	if b, _ := os.ReadFile(filepath.Join(lib, "Heat.1995.mkv")); string(b) != "heat in lib" {
+		t.Error("a file already in the library folder is never overwritten")
+	}
+	if n := e.CollectDownloads(); n != 0 {
+		t.Errorf("nothing left to collect: %d", n)
+	}
+}
+
+func TestAFileStillBeingDownloadedIsNotCollected(t *testing.T) {
+	old := stableAfter
+	stableAfter = time.Hour
+	defer func() { stableAfter = old }()
+	e, _, _, lib, _ := autoRig(t)
+	write(t, filepath.Join(filepath.Dir(lib), "Up.2009.1080p.BluRay.x264.mkv"), "up")
+	if n := e.CollectDownloads(); n != 0 {
+		t.Fatalf("it was only just written: %d", n)
+	}
+}
+
+// The whole of the owner's flow: a download lands in the Telegram Desktop
+// folder, is moved into the library folder, backed up, filed, and the request it
+// answers is cleared.
+func TestFromADownloadToAnAnsweredRequestWithoutAnyoneTouchingIt(t *testing.T) {
+	old := stableAfter
+	stableAfter = 0
+	defer func() { stableAfter = old }()
+	e, st, root, lib, told := autoRig(t)
+	ctx := context.Background()
+	phoneSt, _ := store.Open(filepath.Join(t.TempDir(), "p.db"))
+	t.Cleanup(func() { phoneSt.Close() })
+	phone := NewWith(phoneSt, e.tg.(*fakeTG), t.TempDir())
+	phone.ReadOnly()
+	phone.MakeRequest(ctx, Request{Kind: "movie", TMDB: 14160, Title: "Up", Year: 2009})
+	e.SyncRequests(ctx)
+
+	write(t, filepath.Join(filepath.Dir(lib), "Up.2009.1080p.BluRay.x264.mkv"), "up")
+	e.AutoSortOnce(ctx) // collects it; it isn't backed up yet, so it isn't filed yet
+	waitTasks(t, e)
+	if !exists(filepath.Join(lib, "Up.2009.1080p.BluRay.x264.mkv")) {
+		t.Fatal("moved into the library folder")
+	}
+	if exists(filepath.Join(lib, "Movies", "Up (2009)", "Up (2009).mkv")) {
+		t.Fatal("not filed before it is backed up")
+	}
+	syncAll(t, e, st, root) // the backup runs
+	e.AutoSortOnce(ctx)     // and now it is filed
+	waitTasks(t, e)
+	time.Sleep(300 * time.Millisecond)
+	if !exists(filepath.Join(lib, "Movies", "Up (2009)", "Up (2009).mkv")) {
+		t.Fatal("filed once backed up")
+	}
+	if len(*told) != 0 {
+		t.Errorf("nobody is bothered: %v", *told)
+	}
+	if got := e.Requests(); len(got) != 1 || got[0].State != "fulfilled" {
+		t.Errorf("the request is answered: %+v", got)
+	}
+	phone.SyncRequests(ctx)
+	if phone.Requests()[0].State == "" {
+		t.Error("the phone hears about it")
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Sammy-77A/tgvault/internal/media"
 	"github.com/Sammy-77A/tgvault/internal/store"
 )
 
@@ -52,6 +53,7 @@ func (e *Engine) AutoSortOnce(ctx context.Context) {
 	if e.readOnly || (!e.HasTMDBKey() && e.movieDB == nil) {
 		return
 	}
+	e.CollectDownloads()
 	files, err := e.inbox()
 	if err != nil {
 		return
@@ -73,6 +75,86 @@ func (e *Engine) AutoSortOnce(ctx context.Context) {
 	if id, err := e.organize(ctx, ready, true); err == nil {
 		e.awaitTask(id)
 	}
+}
+
+// libraryDir is the library folder on this computer.
+func (e *Engine) libraryDir() (string, store.Root, bool) {
+	root, rel, ok := e.rootFor(e.MediaRoot())
+	if !ok || rel == "" {
+		return "", store.Root{}, false
+	}
+	return filepath.Join(root.Path, filepath.FromSlash(rel)), root, true
+}
+
+// CollectDownloads moves finished movie and show downloads from the folder that
+// holds the library folder (Telegram Desktop's own download folder) into it, so
+// they are backed up there and then filed. Only videos whose names look like a
+// release (a year, or season and episode numbers) are taken, once they have
+// stopped changing and nothing else has them open; anything else in that folder
+// is left alone. Subtitle files with the same name go with them. It returns how
+// many videos it moved.
+func (e *Engine) CollectDownloads() int {
+	if e.readOnly {
+		return 0
+	}
+	dir, root, ok := e.libraryDir()
+	if !ok {
+		return 0
+	}
+	parent := filepath.Dir(dir)
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, ent := range entries {
+		if ent.IsDir() || !media.IsVideo(filepath.Ext(ent.Name())) {
+			continue
+		}
+		name := ent.Name()
+		info := media.Parse(name)
+		if !(info.HasSeason && len(info.Episodes) > 0) && info.Year == 0 {
+			continue // not obviously a movie or show: not ours to move
+		}
+		src := filepath.Join(parent, name)
+		fi, err := os.Stat(src)
+		if err != nil || !fi.Mode().IsRegular() || time.Since(fi.ModTime()) < stableAfter {
+			continue
+		}
+		dst := filepath.Join(dir, name)
+		if _, err := os.Lstat(dst); err == nil {
+			continue // the library folder already has one by that name
+		}
+		// still being written, or being read by the backup right now: leave it for later
+		f, err := os.OpenFile(src, os.O_RDWR, 0)
+		if err != nil {
+			continue
+		}
+		f.Close()
+		if rel, err := filepath.Rel(root.Path, src); err == nil {
+			if it, err := e.st.ItemByPath(root.Label + "/" + filepath.ToSlash(rel)); err == nil && it.State == store.StateUploading {
+				continue
+			}
+		}
+		if err := moveOnDisk(src, dst, false); err != nil { // makes the library folder if it isn't there yet
+			continue
+		}
+		n++
+		e.st.MediaLogAdd("collect", name, "moved from the Telegram Desktop folder into the library folder")
+		// subtitles beside it
+		stem := strings.TrimSuffix(name, filepath.Ext(name))
+		for _, other := range entries {
+			on := other.Name()
+			if other.IsDir() || !media.IsSubtitle(filepath.Ext(on)) || !strings.HasPrefix(on, stem) {
+				continue
+			}
+			if _, err := os.Lstat(filepath.Join(dir, on)); err == nil {
+				continue
+			}
+			_ = moveOnDisk(filepath.Join(parent, on), filepath.Join(dir, on), false)
+		}
+	}
+	return n
 }
 
 // settled reports whether a file has finished arriving: a file on this PC must
