@@ -935,8 +935,13 @@ func (s *Server) mbPlaylist(w http.ResponseWriter, r *http.Request) {
 		}
 		local := s.eng.MediaLocal(cp)
 		fi, err := os.Stat(local)
+		growing := false
 		if err != nil || fi.IsDir() {
-			continue // not downloaded: nothing streams
+			// Not finished: it can still be played while it downloads.
+			if !s.eng.PlayableWhileDownloading(cp) {
+				continue // not downloaded: nothing streams
+			}
+			growing = true
 		}
 		if cp == body.Start {
 			pl.Start = len(pl.Items)
@@ -946,13 +951,17 @@ func (s *Server) mbPlaylist(w http.ResponseWriter, r *http.Request) {
 		if info.HasSeason && len(info.Episodes) > 0 {
 			it.Season, it.Episode = info.Season, info.Episodes[0]
 		}
-		it.URL = s.localURL(local, "/play/")
+		if growing {
+			it.URL = "http://" + s.addr + "/play/" + s.plays.addGrowing(cp) + "/" + url.PathEscape(path.Base(cp))
+		} else {
+			it.URL = s.localURL(local, "/play/")
+		}
 		it.Pos, _ = s.eng.Progress(cp)
 		it.Subs = s.sidecarSubs(local)
 		pl.Items = append(pl.Items, it)
 	}
 	if len(pl.Items) == 0 {
-		fail(w, 400, "Download it to this phone first; nothing streams.")
+		fail(w, 400, "Download it to this phone first. A video can be played while it downloads, once the start of it has arrived.")
 		return
 	}
 	pl.Title = body.Title

@@ -61,6 +61,8 @@ type DLItem struct {
 	Error    string  `json:"error,omitempty"`
 	Attempts int     `json:"attempts,omitempty"`
 	Waiting  string  `json:"waiting,omitempty"` // why a queued download isn't moving
+	CanPlay  bool    `json:"canPlay,omitempty"` // enough has arrived to start watching
+	ReadyIn  int     `json:"readyIn"`           // seconds until it can be watched without stopping; 0 now, -1 unknown
 }
 
 type dlLive struct {
@@ -141,6 +143,12 @@ func (e *Engine) Downloads() []DLItem {
 		// download keeps its progress and carries on from it
 		if d.State != "done" {
 			it.Done = e.dlPartSize(d.Path) // the file as it stands is the truth
+		}
+		it.ReadyIn = -1
+		if d.State == "running" || d.State == "paused" || d.State == "queued" {
+			if it.CanPlay = e.canPlayPart(d); it.CanPlay {
+				it.ReadyIn = readyIn(it.Size, it.Done, it.Speed, e.durationOf(d.Path))
+			}
 		}
 		out = append(out, it)
 	}

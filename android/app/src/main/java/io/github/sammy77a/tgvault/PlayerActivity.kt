@@ -31,6 +31,10 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.NextRenderersFactory
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
@@ -297,7 +301,13 @@ class PlayerActivity : Activity() {
                 if (software) DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER else DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON,
             )
             .setEnableDecoderFallback(true)
+        // A video that is still downloading is sent as fast as it arrives, so a request can wait a
+        // while for data: wait longer than the usual few seconds, and try again more times.
+        val http = DefaultHttpDataSource.Factory().setConnectTimeoutMs(10_000).setReadTimeoutMs(90_000)
+        val sources = DefaultMediaSourceFactory(DefaultDataSource.Factory(this, http))
+            .setLoadErrorHandlingPolicy(DefaultLoadErrorHandlingPolicy(12))
         val p = ExoPlayer.Builder(this, factory)
+            .setMediaSourceFactory(sources)
             .setSeekBackIncrementMs(10_000)
             .setSeekForwardIncrementMs(10_000)
             .build()

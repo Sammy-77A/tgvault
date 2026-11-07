@@ -35,6 +35,8 @@ const (
 
 // Engine runs scanning, uploading and restoring.
 type Engine struct {
+	durMu       sync.Mutex // guards durs
+	durs        map[string]time.Duration
 	msMu        sync.Mutex // guards mediaStores
 	mediaStores []MediaStore
 

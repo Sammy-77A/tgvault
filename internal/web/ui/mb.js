@@ -346,7 +346,7 @@ screens.details = async ({ kind, id, offline }) => {
       actions.append(el("button", { type: "button", class: "mb-primary", onclick: () => playFiles([f.path], f.path, d) }, icon("play"), f.pos ? "Resume" : "Play"),
         el("button", { type: "button", class: "mb-secondary", onclick: () => removeFiles([f.path], it.title) }, icon("trash"), "Remove from phone"));
     } else if (dlFor(f.path)) {
-      actions.append(dlBlock(dlFor(f.path)));
+      actions.append(dlBlock(dlFor(f.path), d));
     } else {
       actions.append(el("button", { type: "button", class: "mb-primary", onclick: () => downloadFiles([f.path], it.title) }, icon("down"), "Download", f.size ? ` · ${bytes(f.size)}` : ""));
     }
@@ -454,7 +454,7 @@ function episodeRow(d, e, playable) {
     el("div", { class: "mb-ep-main" },
       el("div", { class: "mb-ep-name" }, e.name || `Episode ${e.number}`),
       el("div", { class: "mb-card-sub" }, e.runtime ? mins(e.runtime) : "", f && !f.local ? ` · ${bytes(f.size)}` : "", f && f.local ? " · on this phone" : ""),
-      f && dlFor(f.path) ? dlBlock(dlFor(f.path)) : null,
+      f && dlFor(f.path) ? dlBlock(dlFor(f.path), d) : null,
       pct ? el("div", { class: "mb-progress" }, el("span", { style: `width:${pct}%` })) : null),
     action);
 }
@@ -565,15 +565,33 @@ function dlDetail(it) {
   return [`${pctOf(it)}%`, it.speed > 1 ? `${bytes(it.speed)}/s` : "", fmtEta(it.eta), `${bytes(it.done)} of ${bytes(it.size)}`].filter(Boolean).join(" · ");
 }
 
+// Can what has arrived of this download be watched now?
+const playable = (it) => !!it.canPlay && (it.state === "running" || it.state === "paused" || it.state === "queued");
+
+function readyText(it) {
+  if (!playable(it)) return "";
+  if (it.readyIn === 0) return "Ready to watch";
+  if (it.readyIn > 0) {
+    const m = Math.max(1, Math.round(it.readyIn / 60));
+    return `Watching now will pause when it catches up with the download. Ready to watch without stopping in about ${m >= 90 ? Math.round(m / 60) + " h" : m + " min"}.`;
+  }
+  return "You can start watching now. It may pause while the rest downloads.";
+}
+
 // A progress block for one queued download: bar, numbers and the buttons that fit its state.
-function dlBlock(it) {
+// d is the title the download belongs to, when the page knows it (for subtitles and the player's title).
+function dlBlock(it, d) {
   const bar = el("div", { class: "mb-progress thick" + (it.state === "failed" ? " bad" : "") }, el("span", { style: `width:${pctOf(it)}%`, "data-dlbar": it.path }));
   const btns = el("div", { class: "mb-dl-btns" },
     (it.state === "running" || it.state === "queued") ? el("button", { type: "button", class: "mb-link", onclick: () => dlControl("pause", it.path) }, "Pause") : null,
     it.state === "paused" ? el("button", { type: "button", class: "mb-link", onclick: () => dlControl("resume", it.path) }, "Resume") : null,
     it.state === "failed" ? el("button", { type: "button", class: "mb-link", onclick: () => dlControl("retry", it.path) }, "Retry") : null,
     el("button", { type: "button", class: "mb-link bad", onclick: () => dlControl("cancel", it.path) }, "Cancel"));
-  return el("div", { class: "mb-dl" }, el("div", { class: "mb-dl-text", "data-dltext": it.path }, dlDetail(it)), bar, btns);
+  const ctx = d || { item: { id: 0, kind: it.path.includes("/Shows/") ? "show" : "movie", title: it.title } };
+  const play = el("div", { class: "mb-dl-play", "data-dlplay": it.path, hidden: !playable(it) },
+    el("button", { type: "button", class: "mb-secondary", "data-dlplaybtn": it.path, onclick: () => playFiles([it.path], it.path, ctx) }, icon("play"), it.readyIn === 0 ? "Play now" : "Play while downloading"),
+    el("p", { class: "mb-hint", "data-dlready": it.path }, readyText(it)));
+  return el("div", { class: "mb-dl" }, el("div", { class: "mb-dl-text", "data-dltext": it.path }, dlDetail(it)), bar, play, btns);
 }
 
 async function removeFiles(paths, label) {
@@ -870,6 +888,13 @@ function mbPaintProgress() {
   for (const it of (MB.dl ? MB.dl.items : [])) {
     for (const bar of document.querySelectorAll(`[data-dlbar="${CSS.escape(it.path)}"]`)) bar.style.width = pctOf(it) + "%";
     for (const t of document.querySelectorAll(`[data-dltext="${CSS.escape(it.path)}"]`)) t.textContent = t.classList.contains("mb-ep-dl") ? pctOf(it) + "%" : dlDetail(it);
+    for (const box of document.querySelectorAll(`[data-dlplay="${CSS.escape(it.path)}"]`)) {
+      box.hidden = !playable(it);
+      const hint = box.querySelector("[data-dlready]");
+      if (hint) hint.textContent = readyText(it);
+      const btn = box.querySelector("[data-dlplaybtn]");
+      if (btn && btn.lastChild) btn.lastChild.textContent = it.readyIn === 0 ? "Play now" : "Play while downloading";
+    }
   }
 }
 

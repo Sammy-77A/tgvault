@@ -26,6 +26,7 @@ type playKey struct {
 	msg     int
 	entry   string
 	local   string // a downloaded file on this device, instead of a stored one
+	growing string // a library video still downloading: its cloud path
 	expires time.Time
 }
 
@@ -74,6 +75,26 @@ func (p *playKeys) addLocal(file string) string {
 	return key
 }
 
+// addGrowing makes a key for a library video that is still downloading.
+func (p *playKeys) addGrowing(cloudPath string) string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	key := hex.EncodeToString(b)
+	now := time.Now()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.m == nil {
+		p.m = map[string]playKey{}
+	}
+	for k, v := range p.m {
+		if now.After(v.expires) {
+			delete(p.m, k)
+		}
+	}
+	p.m[key] = playKey{growing: cloudPath, expires: now.Add(playKeyLife)}
+	return key
+}
+
 func loopback(r *http.Request) bool {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	return err == nil && net.ParseIP(host).IsLoopback()
@@ -116,12 +137,34 @@ func (s *Server) play(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, k.local) // handles ranges, so seeking works
 		return
 	}
+	if k.growing != "" {
+		s.serveGrowing(w, r, k.growing)
+		return
+	}
 	v, err := s.eng.Version(k.msg)
 	if err != nil {
 		http.Error(w, "unknown version", http.StatusNotFound)
 		return
 	}
 	s.servePreview(w, r, v, k.entry)
+}
+
+// serveGrowing serves a library video that is still downloading: the part
+// already on disk, and Telegram for anything further on. The full length is
+// announced from the start, so the player can seek.
+func (s *Server) serveGrowing(w http.ResponseWriter, r *http.Request, cloudPath string) {
+	pv, err := s.eng.OpenGrowing(r.Context(), cloudPath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	defer pv.Close()
+	name := path.Base(cloudPath)
+	h := w.Header()
+	h.Set("Content-Type", previewType(name))
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Cache-Control", "no-store")
+	http.ServeContent(w, r, "", pv.ModTime, pv)
 }
 
 // playTarget reads which file the page wants to play and its name.

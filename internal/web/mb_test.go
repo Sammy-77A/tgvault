@@ -550,3 +550,49 @@ func TestEveryMovieRouteIsOnTheLibraryList(t *testing.T) {
 		}
 	}
 }
+
+func TestAVideoStillDownloadingCanBePlayedAndSeeked(t *testing.T) {
+	s, eng, _ := mbRig(t)
+	root := "Downloads/Telegram Desktop/tgmoviebox"
+	p := root + "/Movies/Heat (1995)/Heat (1995).mkv"
+	size := int64(3 << 20)
+	if err := s.st.AddVersion(store.Version{MsgID: 20, CloudPath: p, Kind: store.KindFile, Size: size, Hash: "h", UploadedAt: 20}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.st.DLUpsert(store.MBDownload{Path: p, MsgID: 20, Size: size, State: "queued"}); err != nil {
+		t.Fatal(err)
+	}
+	// nothing on disk yet: nothing to play
+	if code := post(t, s.mbPlaylist, "/api/mb/playlist", `{"paths":["`+p+`"]}`, nil); code != 400 {
+		t.Fatalf("not started yet: %d", code)
+	}
+	part := eng.MediaLocal(p) + ".part"
+	os.MkdirAll(filepath.Dir(part), 0o755)
+	data := bytes.Repeat([]byte("abcdefgh"), (2<<20)/8)
+	os.WriteFile(part, data, 0o644) // two blocks have arrived
+	var resp struct {
+		Playlist struct{ Items []struct{ Name, URL string } }
+	}
+	if code := post(t, s.mbPlaylist, "/api/mb/playlist", `{"paths":["`+p+`"]}`, &resp); code != 200 || len(resp.Playlist.Items) != 1 {
+		t.Fatalf("playlist of a download in progress: %d %+v", code, resp)
+	}
+	r := httptest.NewRequest("GET", strings.TrimPrefix(resp.Playlist.Items[0].URL, "http://"+s.addr), nil)
+	r.RemoteAddr = "127.0.0.1:5555"
+	r.Header.Set("Range", "bytes=4-13")
+	w := httptest.NewRecorder()
+	s.play(w, r)
+	if w.Code != 206 || w.Body.String() != "efghabcdef" {
+		t.Fatalf("range read of the part: %d %q", w.Code, w.Body)
+	}
+	if cr := w.Header().Get("Content-Range"); cr != "bytes 4-13/3145728" {
+		t.Fatalf("the player is told the full length so it can seek: %q", cr)
+	}
+	// still only this device
+	r2 := httptest.NewRequest("GET", strings.TrimPrefix(resp.Playlist.Items[0].URL, "http://"+s.addr), nil)
+	r2.RemoteAddr = "192.168.1.9:5555"
+	w2 := httptest.NewRecorder()
+	s.play(w2, r2)
+	if w2.Code != 403 {
+		t.Fatalf("only this device may play: %d", w2.Code)
+	}
+}

@@ -232,3 +232,6 @@ body.mb-on .jump { display: none !important; }
 .mb-space-list { max-height: 38vh; overflow-y: auto; margin: .5rem 0; }
 .mb-space-row { display: block; padding: .3rem 0; }
 .mb-settings h3 { margin: .9rem 0 .3rem; font-size: 1rem; }
+
+.mb-dl-play { margin: .5rem 0 .2rem; }
+.mb-dl-play .mb-hint { margin: .35rem 0 0; font-size: .8rem; }
