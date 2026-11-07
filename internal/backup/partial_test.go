@@ -223,3 +223,97 @@ func TestFilesInSeveralMessagesAreNotOfferedWhileDownloading(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// sparse is a file made of a few pieces; everywhere else reads as zeros.
+type sparse struct {
+	size   int64
+	pieces map[int64][]byte
+	reads  int
+}
+
+func (s *sparse) ReadAt(p []byte, off int64) (int, error) {
+	s.reads++
+	if off >= s.size {
+		return 0, io.EOF
+	}
+	n := int64(len(p))
+	if off+n > s.size {
+		n = s.size - off
+	}
+	for i := int64(0); i < n; i++ {
+		p[i] = 0
+	}
+	for at, b := range s.pieces {
+		for i := range b {
+			if pos := at + int64(i) - off; pos >= 0 && pos < n {
+				p[pos] = b[i]
+			}
+		}
+	}
+	if n < int64(len(p)) {
+		return int(n), io.EOF
+	}
+	return int(n), nil
+}
+
+func box(typ string, body []byte) []byte {
+	b := make([]byte, 8, 8+len(body))
+	binary.BigEndian.PutUint32(b, uint32(8+len(body)))
+	copy(b[4:], typ)
+	return append(b, body...)
+}
+
+func mvhd(version byte, scale uint32, dur uint64) []byte {
+	var b []byte
+	if version == 1 {
+		b = make([]byte, 4+8+8+4+8)
+		b[0] = 1
+		binary.BigEndian.PutUint32(b[20:], scale)
+		binary.BigEndian.PutUint64(b[24:], dur)
+	} else {
+		b = make([]byte, 4+4+4+4+4)
+		binary.BigEndian.PutUint32(b[12:], scale)
+		binary.BigEndian.PutUint32(b[16:], uint32(dur))
+	}
+	return box("mvhd", b)
+}
+
+func TestMp4DurationFromTheMovieHeader(t *testing.T) {
+	ftyp := box("ftyp", []byte("isom\x00\x00\x00\x00isom"))
+	// moov up front (a file made for streaming)
+	moov := box("moov", append(mvhd(0, 1000, 5_400_000), box("trak", make([]byte, 40))...))
+	front := append(append(append([]byte{}, ftyp...), moov...), box("mdat", make([]byte, 100))...)
+	r := &sparse{size: int64(len(front)), pieces: map[int64][]byte{0: front}}
+	if d, ok := mp4Duration(r, r.size); !ok || d != 90*time.Minute {
+		t.Fatalf("moov first: %v %v", d, ok)
+	}
+	// moov at the end after a 700 MB mdat: one hop over the mdat, nothing read inside it
+	const mdat = int64(700 << 20)
+	hdr := make([]byte, 8)
+	binary.BigEndian.PutUint32(hdr, uint32(mdat))
+	copy(hdr[4:], "mdat")
+	moov2 := box("moov", mvhd(1, 600, 600*3000)) // 3000 s at 600/s
+	at := int64(len(ftyp)) + mdat
+	r2 := &sparse{size: at + int64(len(moov2)), pieces: map[int64][]byte{0: ftyp, int64(len(ftyp)): hdr, at: moov2}}
+	if d, ok := mp4Duration(r2, r2.size); !ok || d != 50*time.Minute {
+		t.Fatalf("moov last, version 1: %v %v", d, ok)
+	}
+	if r2.reads > 12 {
+		t.Errorf("the walk should read only box headers: %d reads", r2.reads)
+	}
+	// not a video, or a moov with no header
+	if _, ok := mp4Duration(&sparse{size: 40, pieces: map[int64][]byte{0: []byte("this is certainly not an mp4 file at all!!")[:40]}}, 40); ok {
+		t.Error("not an mp4")
+	}
+	empty := box("moov", box("trak", make([]byte, 20)))
+	if _, ok := mp4Duration(&sparse{size: int64(len(ftyp) + len(empty)), pieces: map[int64][]byte{0: append(append([]byte{}, ftyp...), empty...)}}, int64(len(ftyp)+len(empty))); ok {
+		t.Error("no movie header")
+	}
+	// the extension picks the reader
+	if d, ok := videoDurationAt(r, r.size, ".MP4"); !ok || d != 90*time.Minute {
+		t.Fatalf("by extension: %v %v", d, ok)
+	}
+	if _, ok := videoDurationAt(r, r.size, ".avi"); ok {
+		t.Error("avi isn't read")
+	}
+}

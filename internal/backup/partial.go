@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"path"
+	"strings"
 	"sync"
 	"time"
 
@@ -259,18 +260,97 @@ func readyIn(size, done int64, speed float64, dur time.Duration) int {
 	return int(math.Ceil(need))
 }
 
-// videoDuration reads the length of a Matroska (mkv, webm) video from its first
-// bytes, where the file's information lives. It returns false for anything else
-// or when the part read so far doesn't say.
-func videoDuration(file string) (time.Duration, bool) {
-	f, err := os.Open(file)
-	if err != nil {
-		return 0, false
+// videoDurationAt reads the length of a video from its container: Matroska (mkv,
+// webm) from the first bytes of the file, MP4 (mp4, m4v, mov) from its "moov" box,
+// which may sit at the end of the file (then r reads it from Telegram). It
+// returns false for anything else or when the file doesn't say.
+func videoDurationAt(r io.ReaderAt, size int64, ext string) (time.Duration, bool) {
+	switch strings.ToLower(ext) {
+	case ".mkv", ".webm":
+		buf := make([]byte, 128<<10)
+		if int64(len(buf)) > size {
+			buf = buf[:size]
+		}
+		n, _ := r.ReadAt(buf, 0)
+		return mkvDuration(buf[:n])
+	case ".mp4", ".m4v", ".mov":
+		return mp4Duration(r, size)
 	}
-	defer f.Close()
-	buf := make([]byte, 128<<10)
-	n, _ := io.ReadFull(f, buf)
-	return mkvDuration(buf[:n])
+	return 0, false
+}
+
+// mp4Duration walks the top-level boxes (each hop is one small read, so a huge
+// "mdat" is jumped over) to the "moov" box and reads the length from the
+// movie header at its start.
+func mp4Duration(r io.ReaderAt, size int64) (time.Duration, bool) {
+	boxAt := func(off int64) (typ string, start, total int64, ok bool) {
+		var h [16]byte
+		n, _ := r.ReadAt(h[:], off)
+		if n < 8 {
+			return "", 0, 0, false
+		}
+		total = int64(binary.BigEndian.Uint32(h[0:4]))
+		start = 8
+		switch total {
+		case 1: // a 64-bit size follows
+			if n < 16 {
+				return "", 0, 0, false
+			}
+			total = int64(binary.BigEndian.Uint64(h[8:16]))
+			start = 16
+		case 0: // to the end of the file
+			total = size - off
+		}
+		if total < start {
+			return "", 0, 0, false
+		}
+		return string(h[4:8]), start, total, true
+	}
+	off := int64(0)
+	for hops := 0; hops < 64 && off < size; hops++ {
+		typ, start, total, ok := boxAt(off)
+		if !ok {
+			return 0, false
+		}
+		if typ == "moov" {
+			// the children of moov: the movie header is nearly always the first
+			child := off + start
+			end := off + total
+			for k := 0; k < 16 && child < end; k++ {
+				ct, cs, ctotal, ok := boxAt(child)
+				if !ok {
+					return 0, false
+				}
+				if ct == "mvhd" {
+					var b [32]byte
+					n, _ := r.ReadAt(b[:], child+cs)
+					if n < 20 {
+						return 0, false
+					}
+					var scale uint32
+					var dur uint64
+					if b[0] == 1 { // version 1: 64-bit times
+						if n < 32 {
+							return 0, false
+						}
+						scale = binary.BigEndian.Uint32(b[20:24])
+						dur = binary.BigEndian.Uint64(b[24:32])
+					} else {
+						scale = binary.BigEndian.Uint32(b[12:16])
+						dur = uint64(binary.BigEndian.Uint32(b[16:20]))
+					}
+					if scale == 0 || dur == 0 {
+						return 0, false
+					}
+					return time.Duration(float64(dur) / float64(scale) * float64(time.Second)), true
+				}
+				child += ctotal
+			}
+			return 0, false
+		}
+		off += total
+	}
+	return 0, false
 }
 
 func ebmlVint(b []byte, keepMarker bool) (val uint64, n int, unknown bool) {
@@ -354,26 +434,50 @@ func mkvDuration(b []byte) (time.Duration, bool) {
 	return time.Duration(dur * float64(scale)), true
 }
 
-// durationOf is the length of the video in a download, remembered once known.
+// durationOf is the length of the video in a download, once known. It never
+// waits: the first call starts reading it in the background (an mp4 may have to
+// fetch its end from Telegram), and a later call gets the answer. Until then,
+// and for files that don't say, it is 0.
 func (e *Engine) durationOf(cloudPath string) time.Duration {
 	e.durMu.Lock()
-	d, ok := e.durs[cloudPath]
+	if e.durs == nil {
+		e.durs = map[string]*durState{}
+	}
+	st := e.durs[cloudPath]
+	if st == nil {
+		st = &durState{}
+		e.durs[cloudPath] = st
+	}
+	d := st.d
+	start := d == 0 && !st.busy && st.fails < 3 && time.Since(st.tried) > 30*time.Second
+	if start {
+		st.busy = true
+		st.tried = time.Now()
+	}
 	e.durMu.Unlock()
-	if ok {
-		return d
+	if start {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+			defer cancel()
+			var dur time.Duration
+			if pv, err := e.OpenGrowing(ctx, cloudPath); err == nil {
+				dur, _ = videoDurationAt(pv.At, pv.Size, path.Ext(cloudPath))
+				pv.Close()
+			}
+			e.durMu.Lock()
+			st.d, st.busy = dur, false
+			if dur == 0 {
+				st.fails++
+			}
+			e.durMu.Unlock()
+		}()
 	}
-	file := e.MediaLocal(cloudPath)
-	if _, err := os.Stat(file); err != nil {
-		file += ".part"
-	}
-	if dur, ok := videoDuration(file); ok {
-		e.durMu.Lock()
-		if e.durs == nil {
-			e.durs = map[string]time.Duration{}
-		}
-		e.durs[cloudPath] = dur
-		e.durMu.Unlock()
-		return dur
-	}
-	return 0
+	return d
+}
+
+type durState struct {
+	d     time.Duration
+	busy  bool
+	fails int
+	tried time.Time
 }
