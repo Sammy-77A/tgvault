@@ -364,3 +364,40 @@ func TestAReadOnlyEngineStillResumesDownloads(t *testing.T) {
 		}
 	}
 }
+
+func TestTheTimeLeftComesFromWhatHasReallyArrived(t *testing.T) {
+	e, tg, p, _ := bigRig(t)
+	gate := make(chan struct{})
+	reached := make(chan struct{}, 4)
+	tg.dlFault = func(ctx context.Context, _ int, off int64) error {
+		if off == 2*tgclient.BlockSize {
+			reached <- struct{}{}
+			select {
+			case <-gate:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		return nil
+	}
+	e.QueueDownloads(context.Background(), []string{p})
+	<-reached
+	waitPart(t, e, p, 2*tgclient.BlockSize)
+	// pretend a steady 1 MB/s
+	e.dl.mu.Lock()
+	l := e.dl.live[p]
+	l.speed = 1 << 20
+	l.lastData = time.Now()
+	e.dl.mu.Unlock()
+	var it DLItem
+	for _, x := range e.Downloads() {
+		if x.Path == p {
+			it = x
+		}
+	}
+	// 3 MB file, 2 MB on disk, 1 MB/s: about a second left (the saved figure is still 0)
+	if it.ETA < 1 || it.ETA > 2 {
+		t.Fatalf("time left should follow the file on disk, not the saved figure: %+v", it)
+	}
+	close(gate)
+}

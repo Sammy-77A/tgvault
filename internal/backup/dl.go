@@ -143,6 +143,9 @@ func (e *Engine) Downloads() []DLItem {
 		// download keeps its progress and carries on from it
 		if d.State != "done" {
 			it.Done = e.dlPartSize(d.Path) // the file as it stands is the truth
+			if d.State == "running" && it.Speed > 1 && it.Size > it.Done {
+				it.ETA = int(float64(it.Size-it.Done) / it.Speed) // from what has really arrived
+			}
 		}
 		it.ReadyIn = -1
 		if d.State == "running" || d.State == "paused" || d.State == "queued" {
