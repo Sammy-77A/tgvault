@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.app.PictureInPictureParams
 import android.content.Context
+import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.graphics.Color
@@ -246,6 +247,31 @@ class PlayerActivity : Activity() {
             .build()
     }
 
+    /** Offers to open the current video in VLC (or any other player) when the built-in one can't decode it. */
+    private fun offerOtherPlayer(positionMs: Long) {
+        val url = items.getOrNull(index)?.url ?: single ?: return
+        val name = items.getOrNull(index)?.name ?: title.text.toString()
+        player?.pause()
+        AlertDialog.Builder(this)
+            .setTitle("This phone can't play it here")
+            .setMessage("This video's format (often 10-bit HEVC) isn't supported by your phone's video decoder, so the built-in player can't show it. VLC plays it in software, and it still plays offline from the downloaded file.")
+            .setPositiveButton("Open in VLC") { _, _ ->
+                val view = Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse(url), "video/*")
+                    .putExtra("title", name).putExtra("position", positionMs)
+                try {
+                    startActivity(Intent(view).setPackage("org.videolan.vlc"))
+                } catch (e: Exception) {
+                    try {
+                        startActivity(Intent.createChooser(view, "Open with"))
+                    } catch (e2: Exception) {
+                        Toast.makeText(this, "Install VLC from the Play Store to play this video.", Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
     private fun startPlayer() {
         // A decoder that fails to start hands over to the next one that can play it.
         val p = ExoPlayer.Builder(this, DefaultRenderersFactory(this).setEnableDecoderFallback(true))
@@ -254,6 +280,16 @@ class PlayerActivity : Activity() {
             .build()
         p.addListener(object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
+                // A video this phone's decoders can't handle (10-bit HEVC is the usual one on
+                // budget phones) can still be played by VLC, which decodes in software.
+                if (error.errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED ||
+                    error.errorCode == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ||
+                    error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES ||
+                    error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED
+                ) {
+                    offerOtherPlayer(p.currentPosition)
+                    return
+                }
                 Toast.makeText(
                     this@PlayerActivity,
                     "This can't be played here (${error.errorCodeName}).",
