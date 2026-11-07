@@ -78,14 +78,18 @@ object Updater {
         Handler(Looper.getMainLooper()).post { Toast.makeText(ctx, text, Toast.LENGTH_LONG).show() }
     }
 
+    private const val UPDATE_ID = 4242
+
     /**
-     * Downloads the newest movie-app APK and hands it to Android's installer, which asks
-     * for one tap to confirm. Installing over the app keeps its data. Call off the main thread.
+     * Downloads the newest movie-app APK, showing its progress in a notification, and offers it
+     * to Android's installer (one tap to confirm). The installer can't be opened from the
+     * background, so when the app isn't on screen the finished download waits in a notification.
+     * Installing over the app keeps its data. Call off the main thread.
      */
     fun installLatest(ctx: Context) {
         try {
             if (!ctx.packageManager.canRequestPackageInstalls()) {
-                toast(ctx, "Allow tgmoviebox to install updates, then tap the update notice again.")
+                toast(ctx, "Allow tgmoviebox to install updates, then check for the update again.")
                 ctx.startActivity(
                     Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${ctx.packageName}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                 )
@@ -101,26 +105,63 @@ object Updater {
                 toast(ctx, "tgmoviebox is up to date")
                 return
             }
-            toast(ctx, "Downloading the update…")
+            toast(ctx, "Downloading the update. You can leave the app; a notification shows when it is ready.")
+            Notifications.post(ctx, UPDATE_ID, "Downloading the update", "Starting…", null, 0, quiet = true)
             val dir = File(ctx.cacheDir, "shared").apply { mkdirs() }
             val file = File(dir, "tgmoviebox-update.apk")
             val conn = URL(url).openConnection() as HttpURLConnection
             conn.connectTimeout = 20_000
-            conn.readTimeout = 30_000
+            conn.readTimeout = 60_000
             conn.instanceFollowRedirects = true
             if (conn.responseCode != 200) {
-                toast(ctx, "Couldn't download the update (${conn.responseCode})")
+                fail(ctx, "GitHub answered ${conn.responseCode}")
                 return
             }
-            conn.inputStream.use { input -> file.outputStream().use { input.copyTo(it) } }
+            val total = conn.contentLengthLong
+            var got = 0L
+            var lastPct = -1
+            conn.inputStream.use { input ->
+                file.outputStream().use { out ->
+                    val buf = ByteArray(64 * 1024)
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        out.write(buf, 0, n)
+                        got += n
+                        if (total > 0) {
+                            val pct = (got * 100 / total).toInt()
+                            if (pct != lastPct) {
+                                lastPct = pct
+                                Notifications.post(ctx, UPDATE_ID, "Downloading the update", "$pct%", null, pct, quiet = true)
+                            }
+                        }
+                    }
+                }
+            }
+            if (total > 0 && got != total) {
+                fail(ctx, "the download was cut short")
+                return
+            }
             val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.files", file)
-            ctx.startActivity(
-                Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/vnd.android.package-archive")
-                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK),
-            )
+            val install = Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/vnd.android.package-archive")
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+            val tap = PendingIntent.getActivity(ctx, UPDATE_ID, install, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+            Notifications.cancel(ctx, UPDATE_ID)
+            Notifications.post(ctx, UPDATE_ID + 1, "tgmoviebox update ready", "Tap to install it. Your downloads and sign-in are kept.", tap)
+            try {
+                ctx.startActivity(install) // works when the app is on screen; otherwise the notification carries it
+            } catch (e: Exception) {
+                Log.w("tgvault", "the installer waits in the notification: $e")
+            }
         } catch (e: Exception) {
             Log.w("tgvault", "installing the update: $e")
-            toast(ctx, "Couldn't install the update: ${e.message}")
+            fail(ctx, e.message ?: e.toString())
         }
+    }
+
+    private fun fail(ctx: Context, why: String) {
+        Notifications.cancel(ctx, UPDATE_ID)
+        Notifications.post(ctx, UPDATE_ID + 2, "Couldn't download the update", "$why. Try again from Settings, Check for an update.", null)
+        toast(ctx, "Couldn't download the update: $why")
     }
 }

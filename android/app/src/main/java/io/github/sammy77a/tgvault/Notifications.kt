@@ -60,6 +60,31 @@ object Notifications {
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
     )
 
+    /**
+     * A notification with an optional progress bar and tap action. [quiet] puts it on the
+     * silent downloads channel (for progress); otherwise it is an alert.
+     */
+    fun post(ctx: Context, id: Int, title: String, text: String, tap: PendingIntent?, progress: Int = -1, quiet: Boolean = false) {
+        if (!Core.hasNotifications(ctx)) return
+        createChannels(ctx)
+        val b = NotificationCompat.Builder(ctx, if (quiet) DOWNLOADS else ALERTS)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setAutoCancel(!quiet)
+            .setOnlyAlertOnce(true)
+        if (tap != null) b.setContentIntent(tap)
+        if (progress >= 0) b.setProgress(100, progress, false).setOngoing(true)
+        try {
+            NotificationManagerCompat.from(ctx).notify(id, b.build())
+        } catch (e: SecurityException) {
+            // Notifications are off; the toast still says what happened.
+        }
+    }
+
+    fun cancel(ctx: Context, id: Int) = NotificationManagerCompat.from(ctx).cancel(id)
+
     /** Shows a notification; tapping it opens tgvault, or [link] if given. */
     fun alert(ctx: Context, title: String, body: String, link: String? = null) {
         if (!Core.hasNotifications(ctx)) return
