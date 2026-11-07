@@ -337,3 +337,30 @@ func TestDownloadsGoWhereTheOwnerChoseAndOldOnesAreStillFound(t *testing.T) {
 		t.Fatalf("a missing card falls back to the phone: %v", e.mediaBases())
 	}
 }
+
+// The library app wraps its Telegram connection so it can't change anything;
+// the wrapper must still let downloads resume (it once hid that, and every
+// try began again from zero on the phone).
+func TestAReadOnlyEngineStillResumesDownloads(t *testing.T) {
+	e, tg, p, data := bigRig(t)
+	e.ReadOnly()
+	failed := false
+	tg.dlFault = func(_ context.Context, _ int, off int64) error {
+		if off == 2*tgclient.BlockSize && !failed {
+			failed = true
+			return tgerr.New(503, "Timeout")
+		}
+		return nil
+	}
+	e.QueueDownloads(context.Background(), []string{p})
+	waitDownloads(t, e)
+	got, _ := os.ReadFile(e.MediaLocal(p))
+	if !bytes.Equal(got, data) {
+		t.Fatal("the file should be whole")
+	}
+	for _, off := range tg.dlCalls[1:] {
+		if off == 0 {
+			t.Fatalf("a retry started again from zero: %v", tg.dlCalls)
+		}
+	}
+}
