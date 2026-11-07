@@ -760,3 +760,30 @@ func TestFromADownloadToAnAnsweredRequestWithoutAnyoneTouchingIt(t *testing.T) {
 		t.Error("the phone hears about it")
 	}
 }
+
+// Files are filed one by one, each as soon as it is backed up: the ones still
+// waiting for their backup don't hold the others back, and are filed on their own later.
+func TestEachFileIsFiledAsSoonAsItIsBackedUp(t *testing.T) {
+	old := stableAfter
+	stableAfter = 0
+	defer func() { stableAfter = old }()
+	e, st, root, lib, told := autoRig(t)
+	ctx := context.Background()
+	write(t, filepath.Join(lib, "Up.2009.1080p.BluRay.x264.mkv"), "up")
+	syncAll(t, e, st, root) // this one is backed up
+	write(t, filepath.Join(lib, "Shameless.US.S11E02.720p.mkv"), "s2") // this one is not yet
+	e.AutoSortOnce(ctx)
+	waitTasks(t, e)
+	if !exists(filepath.Join(lib, "Movies", "Up (2009)", "Up (2009).mkv")) {
+		t.Fatal("the backed-up file is filed while the other waits")
+	}
+	if !exists(filepath.Join(lib, "Shameless.US.S11E02.720p.mkv")) {
+		t.Fatal("the file still waiting for its backup stays where it is")
+	}
+	syncAll(t, e, st, root) // its backup finishes
+	e.AutoSortOnce(ctx)
+	waitTasks(t, e)
+	if exists(filepath.Join(lib, "Shameless.US.S11E02.720p.mkv")) {
+		t.Fatalf("and is filed by itself once it is backed up (problems told: %v)", *told)
+	}
+}
