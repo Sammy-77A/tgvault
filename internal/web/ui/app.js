@@ -374,7 +374,10 @@ async function addSuggested() {
 
 // Tasks (downloads, restores, freeing space), shown above every tab.
 function renderTasks(e) {
-  replace($("tasks"), (e.tasks || []).map((t) => {
+  const finished = (e.tasks || []).filter((t) => t.finished).length;
+  replace($("tasks"), finished > 1 ? el("div", { class: "row-head" },
+    el("span", { class: "sub" }, `${finished} finished`),
+    el("button", { class: "small", onclick: () => api("/api/tasks/dismiss-all", {}).then(refresh) }, "Dismiss all")) : null, (e.tasks || []).map((t) => {
     const pct = t.total ? Math.round((t.done / t.total) * 100) : 0;
     return el("div", { class: "card" },
       el("div", { class: "row-head" },

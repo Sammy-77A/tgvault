@@ -526,3 +526,20 @@ func TestTaskIDsSurviveJavaScriptAndDismiss(t *testing.T) {
 		t.Fatalf("after dismissing a, tasks = %+v", tasks)
 	}
 }
+
+func TestDismissAllClearsFinishedTasksAndKeepsRunningOnes(t *testing.T) {
+	e, _ := newSplitEngine(t, newFakeTG())
+	a, b, c := e.newTask("restore", "a"), e.newTask("organize", "b"), e.newTask("restore", "running")
+	a.update(func(t *Task) { t.Finished = true })
+	b.update(func(t *Task) { t.Finished = true; t.Errors = []string{"1 problem"} })
+	if n := e.DismissFinishedTasks(); n != 2 {
+		t.Fatalf("two were finished: %d", n)
+	}
+	tasks := e.Status().Tasks
+	if len(tasks) != 1 || tasks[0].ID != c.ID {
+		t.Fatalf("only the running task stays: %+v", tasks)
+	}
+	if n := e.DismissFinishedTasks(); n != 0 {
+		t.Fatalf("nothing left to clear: %d", n)
+	}
+}

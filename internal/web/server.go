@@ -215,6 +215,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/free", s.free)
 	s.mux.HandleFunc("POST /api/delete-cloud", s.deleteCloud)
 	s.mux.HandleFunc("POST /api/tasks/{id}/dismiss", s.dismissTask)
+	s.mux.HandleFunc("POST /api/tasks/dismiss-all", s.dismissAllTasks)
 	s.mux.HandleFunc("POST /api/reconcile", s.reconcile)
 
 	s.mux.HandleFunc("GET /api/mb/info", s.mbInfo)
@@ -802,6 +803,11 @@ func (s *Server) dismissTask(w http.ResponseWriter, r *http.Request) {
 	}
 	s.eng.DismissTask(id)
 	writeJSON(w, map[string]bool{"ok": true})
+}
+
+// dismissAllTasks clears every finished task from the list.
+func (s *Server) dismissAllTasks(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, map[string]int{"dismissed": s.eng.DismissFinishedTasks()})
 }
 
 func (s *Server) reconcile(w http.ResponseWriter, r *http.Request) {

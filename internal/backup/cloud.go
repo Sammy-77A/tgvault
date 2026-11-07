@@ -369,6 +369,24 @@ func (e *Engine) DismissTask(id int64) {
 	}
 }
 
+// DismissFinishedTasks clears every finished task from the list at once and
+// returns how many it cleared. Tasks still running stay.
+func (e *Engine) DismissFinishedTasks() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	kept := e.tasks[:0]
+	n := 0
+	for _, t := range e.tasks {
+		if t.view().Finished {
+			n++
+			continue
+		}
+		kept = append(kept, t)
+	}
+	e.tasks = kept
+	return n
+}
+
 // rootFor finds the backup root whose label starts a cloud path.
 func (e *Engine) rootFor(cloudPath string) (store.Root, string, bool) {
 	roots, _ := e.st.Roots()
