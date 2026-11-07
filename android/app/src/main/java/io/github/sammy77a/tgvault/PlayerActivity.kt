@@ -31,6 +31,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
+import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.NextRenderersFactory
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultRenderersFactory
@@ -247,6 +248,21 @@ class PlayerActivity : Activity() {
             .build()
     }
 
+    private var software = false // software (FFmpeg) decoding first, after a phone decoder failed
+
+    /** Starts the player again where it was, with software decoding first. */
+    private fun restartPlayer() {
+        player?.let {
+            position = it.currentPosition
+            index = it.currentMediaItemIndex
+            playing = true
+            it.release()
+        }
+        player = null
+        view.player = null
+        startPlayer()
+    }
+
     /** Offers to open the current video in VLC (or any other player) when the built-in one can't decode it. */
     private fun offerOtherPlayer(positionMs: Long) {
         val url = items.getOrNull(index)?.url ?: single ?: return
@@ -254,7 +270,7 @@ class PlayerActivity : Activity() {
         player?.pause()
         AlertDialog.Builder(this)
             .setTitle("This phone can't play it here")
-            .setMessage("This video's format (often 10-bit HEVC) isn't supported by your phone's video decoder, so the built-in player can't show it. VLC plays it in software, and it still plays offline from the downloaded file.")
+            .setMessage("Neither your phone's decoder nor the built-in software decoder could play this video. VLC may manage it, and it still plays offline from the downloaded file.")
             .setPositiveButton("Open in VLC") { _, _ ->
                 val view = Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse(url), "video/*")
                     .putExtra("title", name).putExtra("position", positionMs)
@@ -273,8 +289,15 @@ class PlayerActivity : Activity() {
     }
 
     private fun startPlayer() {
-        // A decoder that fails to start hands over to the next one that can play it.
-        val p = ExoPlayer.Builder(this, DefaultRenderersFactory(this).setEnableDecoderFallback(true))
+        // The phone's own decoders come first (they are fast and easy on the battery). FFmpeg in
+        // software covers what the phone has no decoder for; if the phone's decoder accepts a
+        // video and then fails on it, software decoding goes first for the rest of this viewing.
+        val factory = NextRenderersFactory(this)
+            .setExtensionRendererMode(
+                if (software) DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER else DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON,
+            )
+            .setEnableDecoderFallback(true)
+        val p = ExoPlayer.Builder(this, factory)
             .setSeekBackIncrementMs(10_000)
             .setSeekForwardIncrementMs(10_000)
             .build()
@@ -287,7 +310,13 @@ class PlayerActivity : Activity() {
                     error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES ||
                     error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED
                 ) {
-                    offerOtherPlayer(p.currentPosition)
+                    if (!software) {
+                        software = true
+                        Toast.makeText(this@PlayerActivity, "Switching to software decoding for this video…", Toast.LENGTH_SHORT).show()
+                        ui.post { restartPlayer() }
+                    } else {
+                        offerOtherPlayer(p.currentPosition)
+                    }
                     return
                 }
                 Toast.makeText(

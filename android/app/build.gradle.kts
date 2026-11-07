@@ -72,6 +72,8 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.10.0")
     implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
     // Plays videos the WebView can't (MKV, x265/HEVC) with the phone's decoders.
-    implementation("androidx.media3:media3-exoplayer:1.5.1")
-    implementation("androidx.media3:media3-ui:1.5.1")
+    implementation("androidx.media3:media3-exoplayer:1.7.1")
+    implementation("androidx.media3:media3-ui:1.7.1")
+    // FFmpeg decoders in software, for videos and sound this phone has no decoder for (10-bit HEVC, AC3, DTS...)
+    implementation("io.github.anilbeesetti:nextlib-media3ext:1.7.1-0.9.0")
 }
