@@ -922,9 +922,17 @@ func (s *Server) mbPlaylist(w http.ResponseWriter, r *http.Request) {
 		Lang  string   `json:"lang"`
 		Title string   `json:"title"`
 	}
-	if err := readJSON(r, &body); err != nil || len(body.Paths) == 0 {
+	if err := readJSON(r, &body); err != nil {
 		fail(w, 400, "bad request")
 		return
+	}
+	if len(body.Paths) == 0 {
+		if body.Start != "" {
+			body.Paths = []string{body.Start}
+		} else {
+			fail(w, 400, "bad request")
+			return
+		}
 	}
 	pl := &playlist{TMDB: body.TMDB, Show: body.Show, Lang: body.Lang, Base: "http://" + s.addr}
 	for _, p := range body.Paths {

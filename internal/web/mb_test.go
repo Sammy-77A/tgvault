@@ -302,6 +302,17 @@ func TestDownloadsPlayAndProgressStayInsideTheLibrary(t *testing.T) {
 	if len(it.Subs) != 1 || it.Subs[0].Lang != "en" {
 		t.Fatalf("the sidecar subtitle should be offered: %+v", it)
 	}
+	// fallback when paths is empty but start is provided
+	var respStart struct {
+		Playlist struct {
+			Items []struct {
+				Name, URL string
+			}
+		}
+	}
+	if code := post(t, s.mbPlaylist, "/api/mb/playlist", `{"paths":[],"start":"`+up+`.mkv","tmdb":14160}`, &respStart); code != 200 || len(respStart.Playlist.Items) != 1 {
+		t.Fatalf("playlist with start fallback: %d %+v", code, respStart)
+	}
 	// the links work, from this device only
 	serve := func(h http.HandlerFunc, link string) *httptest.ResponseRecorder {
 		w := httptest.NewRecorder()

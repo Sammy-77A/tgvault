@@ -436,7 +436,7 @@ async function fillSeason(body, d, s) {
   const bar = el("div", { class: "mb-season-actions" },
     toGet.length ? el("button", { type: "button", class: "mb-secondary", onclick: () => downloadFiles(toGet.map((e) => e.file.path), `${it.title} season ${s.number}`) }, icon("down"), `Download ${toGet.length === all.length ? "season" : toGet.length + " missing"}`, ` · ${bytes(toGet.reduce((n, e) => n + e.file.size, 0))}`) : null,
     onPhone.length ? el("button", { type: "button", class: "mb-secondary", onclick: () => removeFiles(onPhone.map((e) => e.file.path), `${it.title} season ${s.number}`) }, icon("trash"), "Remove from phone") : null);
-  const playable = d.library ? d.library.seasons.flatMap((x) => x.episodes).filter((f) => f.local).map((f) => f.path) : [];
+  const playable = onPhone.map((e) => e.file.path);
   const rows = eps.map((e) => episodeRow(d, e, playable));
   body.replaceChildren(bar, ...rows);
 }
@@ -445,8 +445,9 @@ function episodeRow(d, e, playable) {
   const f = e.file;
   const pct = f && f.dur ? Math.min(100, Math.round((f.pos / f.dur) * 100)) : 0;
   let action;
+  const pList = f && playable && playable.includes(f.path) ? playable : (f ? [f.path] : []);
   if (!f) action = el("span", { class: "mb-ep-none" }, "Not in library");
-  else if (f.local) action = el("button", { type: "button", class: "mb-round", "aria-label": "Play", onclick: () => playFiles(playable, f.path, d) }, icon("play"));
+  else if (f.local) action = el("button", { type: "button", class: "mb-round", "aria-label": "Play", onclick: () => playFiles(pList, f.path, d) }, icon("play"));
   else if (dlFor(f.path)) action = el("span", { class: "mb-ep-dl", "data-dltext": f.path }, pctOf(dlFor(f.path)) + "%");
   else action = el("button", { type: "button", class: "mb-round ghost", "aria-label": "Download", onclick: () => downloadFiles([f.path], `${d.item.title} episode ${e.number}`) }, icon("down"));
   return el("div", { class: "mb-ep" + (f ? "" : " off") },
@@ -622,7 +623,11 @@ async function removeFiles(paths, label) {
 
 async function playFiles(paths, start, d) {
   try {
-    const r = await api("/api/mb/playlist", { paths, start, tmdb: d.item.id || 0, show: d.item.kind === "show", title: d.item.title, lang: mbLang() });
+    let list = Array.isArray(paths) ? paths.slice() : [];
+    if (start && !list.includes(start)) list.push(start);
+    if (!list.length && start) list = [start];
+    const item = (d && d.item) || {};
+    const r = await api("/api/mb/playlist", { paths: list, start, tmdb: item.id || 0, show: item.kind === "show", title: item.title || "", lang: mbLang() });
     window.__mbLastPlay = r; // the player reads the rest from this link
     location.href = "tgvault://mbplay?u=" + encodeURIComponent(r.url);
   } catch (e) { toast(e.message); }
