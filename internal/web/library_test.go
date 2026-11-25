@@ -53,6 +53,7 @@ func TestLibraryOnlyServesItsFolder(t *testing.T) {
 		{"GET", "/api/cloud?path=Movies/Action", "", 200},
 		{"GET", "/api/search?path=Movies&q=a", "", 200},
 		{"GET", "/api/download?msg=1", "", 200},
+		{"HEAD", "/api/download?msg=1", "", 200},
 		{"GET", "/api/preview?msg=4", "", 200},
 		{"GET", "/api/download?path=Movies/c.mp4", "", 200},
 		{"GET", "/api/thumbs?ids=1,4", "", 200},

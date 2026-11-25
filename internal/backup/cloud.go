@@ -678,10 +678,19 @@ func (e *Engine) Version(msgID int) (store.Version, error) { return e.st.Version
 // fails its check, it returns an error partway; the caller must then abandon
 // w so the half-written file isn't kept.
 func (e *Engine) DownloadTo(ctx context.Context, v store.Version, w io.Writer) error {
+	return e.DownloadToFrom(ctx, v, 0, w)
+}
+
+// DownloadToFrom streams one stored version to w starting at byte offset,
+// which must be a multiple of tgclient.BlockSize when offset > 0.
+func (e *Engine) DownloadToFrom(ctx context.Context, v store.Version, offset int64, w io.Writer) error {
 	if v.IsChange() {
 		return errors.New("a project change must be rebuilt first (ProjectZip)")
 	}
-	return e.streamVersion(ctx, v, w)
+	if offset == 0 {
+		return e.streamVersion(ctx, v, w)
+	}
+	return e.streamVersionFrom(ctx, v, offset, w)
 }
 
 // WriteZip streams a cloud folder as a ZIP, with projects unpacked into their folders.

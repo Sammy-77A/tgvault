@@ -39,6 +39,7 @@ var libraryRoutes = map[string]bool{
 	"GET /api/search":           true,
 	"GET /api/versions":         true,
 	"GET /api/download":         true,
+	"HEAD /api/download":        true,
 	"GET /api/preview":          true,
 	"GET /api/thumbs":           true,
 	"GET /api/thumb":            true,

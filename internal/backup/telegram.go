@@ -15,6 +15,7 @@ type telegram interface {
 	WaitReady(ctx context.Context) error
 	Upload(ctx context.Context, req tgclient.UploadRequest) (int, error)
 	Download(ctx context.Context, msgID int, w io.Writer) error
+	DownloadFrom(ctx context.Context, msgID int, offset int64, w io.Writer) error
 	ReadBlock(ctx context.Context, msgID int, n int64) ([]byte, error)
 	Thumbs(ctx context.Context, ids []int) (map[int][]byte, error)
 	DeleteMessages(ctx context.Context, ids []int) error

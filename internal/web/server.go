@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"log"
@@ -676,17 +677,96 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 		}
 		defer f.Close()
 		attachment(w, name)
+		modTime := time.Unix(v.Mtime, 0)
 		if fi, err := f.Stat(); err == nil {
-			w.Header().Set("Content-Length", strconv.FormatInt(fi.Size(), 10))
+			modTime = fi.ModTime()
 		}
-		_, _ = io.Copy(w, f)
+		http.ServeContent(w, r, name, modTime, f)
 		return
 	}
 	attachment(w, name)
+	w.Header().Set("Accept-Ranges", "bytes")
+	if rng := r.Header.Get("Range"); rng != "" {
+		start, end, ok := parseByteRange(rng, v.Size)
+		if !ok {
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", v.Size))
+			http.Error(w, "invalid range", http.StatusRequestedRangeNotSatisfiable)
+			return
+		}
+		length := end - start + 1
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, v.Size))
+		w.Header().Set("Content-Length", strconv.FormatInt(length, 10))
+		w.WriteHeader(http.StatusPartialContent)
+		if r.Method == http.MethodHead {
+			return
+		}
+		aligned := start - start%tgclient.BlockSize
+		skip := start - aligned
+		pr, pw := io.Pipe()
+		ctx, cancel := context.WithCancel(r.Context())
+		defer cancel()
+		go func() {
+			err := s.eng.DownloadToFrom(ctx, v, aligned, pw)
+			_ = pw.CloseWithError(err)
+		}()
+		if skip > 0 {
+			if _, err := io.CopyN(io.Discard, pr, skip); err != nil {
+				log.Printf("download %s: %v", v.CloudPath, err)
+				return
+			}
+		}
+		if _, err := io.CopyN(w, pr, length); err != nil {
+			log.Printf("download %s: %v", v.CloudPath, err)
+		}
+		return
+	}
 	w.Header().Set("Content-Length", strconv.FormatInt(v.Size, 10))
+	if r.Method == http.MethodHead {
+		return
+	}
 	if err := s.eng.DownloadTo(r.Context(), v, w); err != nil {
 		log.Printf("download %s: %v", v.CloudPath, err)
 	}
+}
+
+// parseByteRange parses a single HTTP Range header ("bytes=start-end",
+// "bytes=start-", or "bytes=-suffix") against size.
+func parseByteRange(hdr string, size int64) (start, end int64, ok bool) {
+	if size <= 0 || !strings.HasPrefix(hdr, "bytes=") {
+		return 0, 0, false
+	}
+	spec := strings.TrimPrefix(hdr, "bytes=")
+	// Multi-range requests are not needed; reject with 416.
+	if strings.Contains(spec, ",") {
+		return 0, 0, false
+	}
+	parts := strings.Split(spec, "-")
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	if parts[0] == "" {
+		suffix, err := strconv.ParseInt(parts[1], 10, 64)
+		if err != nil || suffix <= 0 {
+			return 0, 0, false
+		}
+		start = max(0, size-suffix)
+		return start, size - 1, true
+	}
+	start, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || start < 0 || start >= size {
+		return 0, 0, false
+	}
+	if parts[1] == "" {
+		return start, size - 1, true
+	}
+	end, err = strconv.ParseInt(parts[1], 10, 64)
+	if err != nil || start > end {
+		return 0, 0, false
+	}
+	if end >= size {
+		end = size - 1
+	}
+	return start, end, true
 }
 
 func (s *Server) downloadZip(w http.ResponseWriter, r *http.Request) {

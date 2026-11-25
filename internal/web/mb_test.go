@@ -35,6 +35,7 @@ func (f *mailTG) Info() tgclient.Info                                         { 
 func (f *mailTG) WaitReady(context.Context) error                             { return nil }
 func (f *mailTG) Upload(context.Context, tgclient.UploadRequest) (int, error) { return 0, io.EOF }
 func (f *mailTG) Download(context.Context, int, io.Writer) error              { return io.EOF }
+func (f *mailTG) DownloadFrom(context.Context, int, int64, io.Writer) error { return io.EOF }
 func (f *mailTG) ReadBlock(context.Context, int, int64) ([]byte, error)       { return nil, io.EOF }
 func (f *mailTG) Thumbs(context.Context, []int) (map[int][]byte, error)       { return nil, nil }
 func (f *mailTG) DeleteMessages(context.Context, []int) error                 { return nil }

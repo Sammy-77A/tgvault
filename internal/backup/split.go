@@ -402,6 +402,28 @@ func (e *Engine) streamVersion(ctx context.Context, v store.Version, w io.Writer
 	return nil
 }
 
+// streamVersionFrom streams a version to w starting at byte offset.
+// Because it skips earlier bytes, it cannot verify the whole-file hash.
+func (e *Engine) streamVersionFrom(ctx context.Context, v store.Version, offset int64, w io.Writer) error {
+	parts, err := e.pieces(v)
+	if err != nil {
+		return err
+	}
+	for _, p := range parts {
+		if p.Offset+p.Size <= offset {
+			continue
+		}
+		partOffset := int64(0)
+		if offset > p.Offset {
+			partOffset = offset - p.Offset
+		}
+		if err := e.tg.DownloadFrom(ctx, p.MsgID, partOffset, w); err != nil {
+			return partErr(p, len(parts), err)
+		}
+	}
+	return nil
+}
+
 func partErr(p store.Part, n int, err error) error {
 	if n == 1 {
 		return err

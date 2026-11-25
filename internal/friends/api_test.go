@@ -51,6 +51,10 @@ func (f *fakeTG) Upload(ctx context.Context, req tgclient.UploadRequest) (int, e
 }
 
 func (f *fakeTG) Download(ctx context.Context, id int, w io.Writer) error {
+	return f.DownloadFrom(ctx, id, 0, w)
+}
+
+func (f *fakeTG) DownloadFrom(ctx context.Context, id int, offset int64, w io.Writer) error {
 	f.mu.Lock()
 	m, ok := f.msgs[id]
 	f.mu.Unlock()
